@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace = "com.lowgx"
+    namespace = "com.xnish.space"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.lowgx"
+        applicationId = "com.xnish.space"
         minSdk = 31
         targetSdk = 34
         versionCode = 1
