@@ -89,33 +89,35 @@ val GAMES = listOf(
 
 enum class TexMode { Blur, Pixel }
 
-// Level 1..4 -> skala resolusi render (makin besar level = makin rendah kualiti)
-fun scaleFor(level: Int) = when (level) { 1 -> 0.75f; 2 -> 0.50f; 3 -> 0.30f; else -> 0.20f }
-
+// Level 1..4 -> forceTextureLodOffset1..4 (makin besar = tekstur makin rendah)
 fun applyAll(selected: List<Game>, mode: TexMode, level: Int): String {
     if (selected.isEmpty()) return "Pilih sekurang-kurangnya satu game."
     val pkgs = selected.joinToString(",") { it.pkg }
     val vals = selected.joinToString(",") { "angle" }
-    val log = StringBuilder()
-    // 1) Paksa ANGLE driver untuk game terpilih
-    log.appendLine(Sh.run("settings put global angle_gl_driver_selection_pkgs $pkgs"))
-    log.appendLine(Sh.run("settings put global angle_gl_driver_selection_values $vals"))
-    // 2) Turunkan resolusi render per-game (GameManager intervention, Android 12+)
-    val s = scaleFor(level)
-    selected.forEach {
-        log.appendLine(Sh.run("cmd game mode performance ${it.pkg}"))
-        log.appendLine(Sh.run("cmd game set --mode 2 --downscale $s --fps 60 ${it.pkg}"))
+    val features = when (mode) {
+        TexMode.Blur -> "disableAnisotropicFiltering:forceTextureLodOffset$level"
+        TexMode.Pixel -> "forceNearestFiltering:disableAnisotropicFiltering:forceTextureLodOffset$level"
     }
-    // Nota: mode Blur/Pixel hanya disimpan sebagai pilihan; kesan sebenar bergantung
-    // pada penapis downscale sistem/OEM (lihat nota dalam jawapan).
-    return log.toString().trim().ifEmpty { "Siap: ${selected.size} game, level $level, ${mode.name}" }
+    val cmd = "settings put global angle_gl_driver_selection_pkgs $pkgs && " +
+        "settings put global angle_gl_driver_selection_values $vals && " +
+        "setprop debug.angle.feature_overrides_enabled $features" +
+        selected.joinToString("") { " && am force-stop ${it.pkg}" }
+    val out = Sh.run(cmd)
+    return "Siap: ${mode.name}, level $level (game ditutup, buka semula)." + if (out.isNotBlank()) "\n$out" else ""
 }
 
 fun resetAll(selected: List<Game>): String {
-    Sh.run("settings delete global angle_gl_driver_selection_pkgs")
-    Sh.run("settings delete global angle_gl_driver_selection_values")
-    selected.forEach { Sh.run("cmd game reset ${it.pkg}") }
-    return "Dikembalikan ke asal."
+    val cmd = "settings delete global angle_gl_driver_selection_values && " +
+        "settings delete global angle_gl_driver_selection_pkgs && " +
+        "setprop debug.angle.feature_overrides_enabled \"\"" +
+        selected.joinToString("") { " && am force-stop ${it.pkg}" }
+    val out = Sh.run(cmd)
+    return "Dikembalikan ke asal." + if (out.isNotBlank()) "\n$out" else ""
+}
+
+fun checkAngle(): String {
+    val out = Sh.run("ls -d /system/*/*angle* /vendor/*/*angle* 2>/dev/null")
+    return if (out.isBlank()) "ANGLE tidak dijumpai di peranti ini." else "ANGLE disokong:\n$out"
 }
 
 // ---------- Activity ----------
@@ -246,8 +248,8 @@ fun LowGXApp() {
             }
 
             Glass(Modifier.fillMaxWidth(), tint = Purple3) {
-                Text("Very Low · ANGLE", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                Text("Tekstur ${mode.name} · level $level", color = Lilac)
+                Text("Low Graphics · ANGLE", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Text("${if (mode == TexMode.Blur) "Smooth" else "Pixel"} · level $level", color = Lilac)
             }
 
             Glass(Modifier.fillMaxWidth(), onClick = { if (Sh.alive() && !Sh.granted()) Sh.ask(); refresh() }) {
@@ -277,7 +279,7 @@ fun LowGXApp() {
                 Text("Reduce texture detail", color = Color.White.copy(.7f))
                 Spacer(Modifier.height(14.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    TexMode.values().forEach { m -> Seg(m.name, mode == m, Modifier.weight(1f)) { mode = m } }
+                    TexMode.values().forEach { m -> Seg(if (m == TexMode.Blur) "Smooth" else "Pixel", mode == m, Modifier.weight(1f)) { mode = m } }
                 }
                 Spacer(Modifier.height(18.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -294,6 +296,10 @@ fun LowGXApp() {
 
             if (status.isNotEmpty()) Text(status, color = Color.White.copy(.75f), fontSize = 12.sp)
 
+            Seg("Cek ANGLE support", false, Modifier.fillMaxWidth()) {
+                if (!Sh.granted()) { status = "Shizuku belum bersedia"; return@Seg }
+                scope.launch { busy = true; status = withContext(Dispatchers.IO) { runCatching { checkAngle() }.getOrElse { it.message ?: "Ralat" } }; busy = false }
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Seg("Reset", false, Modifier.weight(1f)) {
                     if (!Sh.granted()) { status = "Shizuku belum bersedia"; return@Seg }
