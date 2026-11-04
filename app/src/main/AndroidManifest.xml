@@ -11,8 +11,8 @@
 
     <application
         android:label="XNISHz"
-        android:icon="@mipmap/ic_launcher"
-        android:roundIcon="@mipmap/ic_launcher_round"
+        android:icon="@drawable/lowgx_icon"
+    android:roundIcon="@drawable/lowgx_icon"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
 
         <activity
