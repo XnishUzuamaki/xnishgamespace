@@ -1,11 +1,19 @@
 package com.lowgx
 
+import android.content.Context
+import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Canvas as AndroidCanvas
+import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.Drawable
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -21,7 +29,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
@@ -50,16 +62,59 @@ object Sh {
     }
 }
 
-// ---------- Models & Enums ----------
-data class Game(val name: String, val pkg: String)
-
-val GAMES = listOf(
-    Game("Free Fire MAX", "com.dts.freefiremax"),
-    Game("Free Fire", "com.dts.freefireth"),
-    Game("PUBG Mobile", "com.tencent.ig"),
-    Game("Mobile Legends", "com.mobile.legends"),
-    Game("Genshin Impact", "com.miHoYo.GenshinImpact"),
+// ---------- Models & Automatic Game Scanner ----------
+data class Game(
+    val name: String,
+    val pkg: String,
+    val isGame: Boolean,
+    val icon: ImageBitmap? = null
 )
+
+val KNOWN_GAME_PKGS = listOf(
+    "freefire", "mobile.legends", "tencent", "pubg", "genshin", "mihoyo",
+    "roblox", "callofduty", "activision", "supercell", "brawlstars",
+    "clash", "minecraft", "mojang", "carx", "ea.game", "fifa", "efootball",
+    "konami", "garena", "honorofkings", "levelinfinite", "riotgames", "valorant"
+)
+
+fun drawableToImageBitmap(drawable: Drawable): ImageBitmap? = runCatching {
+    if (drawable is BitmapDrawable && drawable.bitmap != null) {
+        return@runCatching drawable.bitmap.asImageBitmap()
+    }
+    val w = drawable.intrinsicWidth.coerceAtLeast(1)
+    val h = drawable.intrinsicHeight.coerceAtLeast(1)
+    val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+    val canvas = AndroidCanvas(bmp)
+    drawable.setBounds(0, 0, canvas.width, canvas.height)
+    drawable.draw(canvas)
+    bmp.asImageBitmap()
+}.getOrNull()
+
+fun loadInstalledApps(ctx: Context): List<Game> {
+    val pm = ctx.packageManager
+    val apps = pm.getInstalledApplications(PackageManager.GET_META_DATA)
+    return apps.mapNotNull { app ->
+        val isSystem = (app.flags and ApplicationInfo.FLAG_SYSTEM) != 0
+        val isUpdatedSystem = (app.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+        if (isSystem && !isUpdatedSystem) return@mapNotNull null
+        if (app.packageName == ctx.packageName) return@mapNotNull null
+        if (pm.getLaunchIntentForPackage(app.packageName) == null) return@mapNotNull null
+
+        val name = pm.getApplicationLabel(app).toString()
+        val pkgLower = app.packageName.lowercase()
+        val isCategoryGame = app.category == ApplicationInfo.CATEGORY_GAME ||
+            (app.flags and ApplicationInfo.FLAG_IS_GAME) != 0
+        val isKnownGame = KNOWN_GAME_PKGS.any { pkgLower.contains(it) }
+        val iconBmp = runCatching { drawableToImageBitmap(pm.getApplicationIcon(app)) }.getOrNull()
+
+        Game(
+            name = name,
+            pkg = app.packageName,
+            isGame = isCategoryGame || isKnownGame,
+            icon = iconBmp
+        )
+    }.sortedWith(compareByDescending<Game> { it.isGame }.thenBy { it.name.lowercase() })
+}
 
 enum class TexMode { Blur, Pixel }
 enum class GpuDriver(val label: String, val sub: String) {
@@ -82,8 +137,8 @@ enum class AnimSpeed(val label: String, val scale: String) {
 data class ConfigState(
     val texMode: TexMode = TexMode.Pixel,
     val texLevel: Int = 4,
-    val resolution: Int = 100, // 50..100
-    val fps: String = "Max",   // 30, 60, 90, 120, Max
+    val resolution: Int = 100,
+    val fps: String = "Max",
     val msaa4x: Boolean = false,
     val driver: GpuDriver = GpuDriver.Angle,
     val gameMode: GameModeOpt = GameModeOpt.Performance,
@@ -93,14 +148,13 @@ data class ConfigState(
     val batterySaver: Boolean = false
 )
 
-// ---------- Core Execution Engine (Real Android Shell Commands) ----------
+// ---------- Core Execution Engine ----------
 fun applyAll(selected: List<Game>, cfg: ConfigState): String {
     if (selected.isEmpty()) return "Pilih sekurang-kurangnya satu game."
 
     val cmds = mutableListOf<String>()
     val pkgs = selected.joinToString(",") { it.pkg }
 
-    // 1. Graphics Driver + ANGLE Low Texture
     when (cfg.driver) {
         GpuDriver.Default -> {
             cmds += "settings delete global angle_gl_driver_selection_pkgs"
@@ -133,56 +187,42 @@ fun applyAll(selected: List<Game>, cfg: ConfigState): String {
         }
     }
 
-    // 2. Game Resolution (Android 12+ cmd game downscale) & FPS Limit & Game Mode
     val downscaleRatio = if (cfg.resolution >= 100) "disable" else (cfg.resolution / 100f).toString()
     val fpsArg = if (cfg.fps == "Max") "disable" else cfg.fps
 
     selected.forEach { g ->
-        // Set Game Mode (1=Standard, 2=Performance, 3=Battery)
         cmds += "cmd game mode ${cfg.gameMode.id} ${g.pkg} 2>/dev/null || true"
-        // Set Downscale & FPS via GameManager service
         cmds += "cmd game set --mode ${cfg.gameMode.id} --downscale $downscaleRatio --fps $fpsArg ${g.pkg} 2>/dev/null || true"
     }
 
-    // System Refresh Rate sync with FPS Limit
     val maxRefresh = if (cfg.fps == "Max") "120.0" else "${cfg.fps}.0"
     val minRefresh = if (cfg.batterySaver) "60.0" else maxRefresh
     cmds += "settings put system peak_refresh_rate $maxRefresh"
     cmds += "settings put system min_refresh_rate $minRefresh"
 
-    // 3. Anti-aliasing 4x MSAA
     cmds += "setprop debug.egl.force_msaa ${if (cfg.msaa4x) "true" else "false"}"
     cmds += "service call SurfaceFlinger 1008 i32 ${if (cfg.msaa4x) 1 else 0} 2>/dev/null || true"
-
-    // 4. Fixed Performance Mode (Lock Clocks)
     cmds += "cmd power set-fixed-performance-mode-enabled ${cfg.fixedPerf}"
 
-    // 5. System Animation Scale
     val sc = cfg.animSpeed.scale
     cmds += "settings put global window_animation_scale $sc"
     cmds += "settings put global transition_animation_scale $sc"
     cmds += "settings put global animator_duration_scale $sc"
 
-    // 6. Internet Boost & Low Ping
     if (cfg.netBoost) {
-        // Elak Wi-Fi tidur dan matikan background scanning yang menyebabkan lag/jitter
         cmds += "settings put global wifi_sleep_policy 2"
         cmds += "settings put global wifi_scan_always_enabled 0"
         cmds += "settings put global ble_scan_always_enabled 0"
         cmds += "settings put global network_recommendations_enabled 0"
-        // DNS Cloudflare (1.1.1.1) untuk masa resolusi paket paling pantas
         cmds += "settings put global private_dns_mode hostname"
         cmds += "settings put global private_dns_specifier one.one.one.one"
-        // Kurangkan latency TCP
         cmds += "setprop net.tcp.nodelay 1"
-        // Hentikan sinkronisasi automatik di latar belakang semasa bermain
         cmds += "content insert --uri content://settings/global --bind name:s:auto_sync --bind value:s:0 2>/dev/null || true"
     } else {
         cmds += "settings put global wifi_scan_always_enabled 1"
         cmds += "settings put global private_dns_mode opportunistic"
     }
 
-    // 7. Battery Saver
     if (cfg.batterySaver) {
         cmds += "cmd power set-mode 1"
         cmds += "cmd power set-adaptive-power-saver-enabled true"
@@ -193,14 +233,12 @@ fun applyAll(selected: List<Game>, cfg: ConfigState): String {
         cmds += "settings put global forced_app_standby_enabled 0"
     }
 
-    // 8. Force-stop selected games supaya tetapan terus berkuat kuasa
     selected.forEach { g ->
         cmds += "am force-stop ${g.pkg}"
     }
 
     val out = Sh.run(cmds.joinToString(" && "))
-    return "Tetapan berjaya digunakan (${cfg.driver.label}, Res ${cfg.resolution}%, FPS ${cfg.fps}, Mode ${cfg.gameMode.label})." +
-        if (out.isNotBlank()) "\n$out" else ""
+    return "Tetapan berjaya digunakan pada ${selected.size} game." + if (out.isNotBlank()) "\n$out" else ""
 }
 
 fun resetAll(selected: List<Game>): String {
@@ -370,21 +408,55 @@ fun ToggleRow(title: String, subtitle: String, checked: Boolean, badge: String? 
 // ---------- Screen ----------
 @Composable
 fun LowGXApp() {
+    val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var shizuku by remember { mutableStateOf("Memeriksa…") }
     var cfg by remember { mutableStateOf(ConfigState()) }
-    val selected = remember { mutableStateListOf(GAMES[0]) }
+
+    var installedApps by remember { mutableStateOf<List<Game>>(emptyList()) }
+    var loadingApps by remember { mutableStateOf(true) }
+    var showGamesOnly by remember { mutableStateOf(true) }
+    var searchQuery by remember { mutableStateOf("") }
+    val selected = remember { mutableStateListOf<Game>() }
+
     var status by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
 
-    fun refresh() {
+    fun refreshShizuku() {
         shizuku = when {
             !Sh.alive() -> "Tidak berjalan – mulakan Shizuku"
             !Sh.granted() -> "Ketik untuk beri kebenaran"
             else -> "Connected"
         }
     }
-    LaunchedEffect(Unit) { refresh() }
+
+    fun scanDeviceApps() {
+        scope.launch {
+            loadingApps = true
+            val list = withContext(Dispatchers.IO) { loadInstalledApps(ctx) }
+            installedApps = list
+            if (list.none { it.isGame }) { showGamesOnly = false }
+            if (selected.isEmpty()) {
+                list.firstOrNull { it.isGame }?.let { selected.add(it) }
+            }
+            loadingApps = false
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        refreshShizuku()
+        scanDeviceApps()
+    }
+
+    val filteredApps = remember(installedApps, showGamesOnly, searchQuery) {
+        installedApps.filter { app ->
+            val matchFilter = if (showGamesOnly) app.isGame || app in selected else true
+            val matchSearch = searchQuery.isBlank() ||
+                app.name.contains(searchQuery, ignoreCase = true) ||
+                app.pkg.contains(searchQuery, ignoreCase = true)
+            matchFilter && matchSearch
+        }
+    }
 
     Box(Modifier.fillMaxSize()) {
         ParticleBackground()
@@ -407,7 +479,7 @@ fun LowGXApp() {
             }
 
             // Shizuku Status
-            Glass(Modifier.fillMaxWidth(), onClick = { if (Sh.alive() && !Sh.granted()) Sh.ask(); refresh() }) {
+            Glass(Modifier.fillMaxWidth(), onClick = { if (Sh.alive() && !Sh.granted()) Sh.ask(); refreshShizuku() }) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Column {
                         Text("Shizuku Service", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
@@ -417,20 +489,102 @@ fun LowGXApp() {
                 }
             }
 
-            // Select Games
+            // ==================== INSTALLED GAMES ====================
             Glass(Modifier.fillMaxWidth()) {
-                Text("Select Games", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                Spacer(Modifier.height(8.dp))
-                GAMES.forEach { g ->
-                    val on = g in selected
-                    Row(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
-                            .clickable { if (on) selected.remove(g) else selected.add(g) }
-                            .padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Column {
+                        Text("Installed Games", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        Text("${selected.size} dipilih · ${filteredApps.size} dijumpai", fontSize = 12.sp, color = Lilac)
+                    }
+                    Text(
+                        if (loadingApps) "Scanning…" else "Rescan",
+                        color = Lilac,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable { if (!loadingApps) scanDeviceApps() }
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                    )
+                }
+
+                Spacer(Modifier.height(10.dp))
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Seg("Games Only", showGamesOnly, Modifier.weight(1f)) { showGamesOnly = true }
+                    Seg("All Apps (${installedApps.size})", !showGamesOnly, Modifier.weight(1f)) { showGamesOnly = false }
+                }
+
+                Spacer(Modifier.height(10.dp))
+
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("Cari nama game atau pakej…", color = Color.White.copy(.45f), fontSize = 13.sp) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Lilac,
+                        unfocusedBorderColor = Color.White.copy(.2f),
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White
+                    )
+                )
+
+                Spacer(Modifier.height(10.dp))
+
+                if (loadingApps) {
+                    Box(Modifier.fillMaxWidth().padding(vertical = 20.dp), contentAlignment = Alignment.Center) {
+                        Text("Mengimbas aplikasi di dalam peranti anda…", color = Color.White.copy(.7f), fontSize = 13.sp)
+                    }
+                } else if (filteredApps.isEmpty()) {
+                    Box(Modifier.fillMaxWidth().padding(vertical = 16.dp), contentAlignment = Alignment.Center) {
+                        Text("Tiada game ditemui. Cuba tukar ke tab 'All Apps'.", color = Color.White.copy(.6f), fontSize = 13.sp)
+                    }
+                } else {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 260.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        Checkbox(on, { if (it) selected.add(g) else selected.remove(g) }, colors = CheckboxDefaults.colors(checkedColor = Lilac, checkmarkColor = Purple1))
-                        Text(g.name, color = Color.White, fontWeight = FontWeight.Medium)
+                        filteredApps.forEach { g ->
+                            val on = selected.any { it.pkg == g.pkg }
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(if (on) Lilac.copy(alpha = 0.14f) else Color.Transparent)
+                                    .clickable {
+                                        if (on) selected.removeAll { it.pkg == g.pkg }
+                                        else selected.add(g)
+                                    }
+                                    .padding(horizontal = 6.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = on,
+                                    onCheckedChange = {
+                                        if (it) selected.add(g) else selected.removeAll { item -> item.pkg == g.pkg }
+                                    },
+                                    colors = CheckboxDefaults.colors(checkedColor = Lilac, checkmarkColor = Purple1)
+                                )
+                                if (g.icon != null) {
+                                    Image(
+                                        bitmap = g.icon,
+                                        contentDescription = g.name,
+                                        modifier = Modifier.size(38.dp).clip(RoundedCornerShape(10.dp))
+                                    )
+                                    Spacer(Modifier.width(10.dp))
+                                }
+                                Column(Modifier.weight(1f)) {
+                                    Text(g.name, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(g.pkg, color = Color.White.copy(.5f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -440,13 +594,9 @@ fun LowGXApp() {
                 Text("GRAPHICS", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Lilac, letterSpacing = 1.5.sp)
                 Spacer(Modifier.height(14.dp))
 
-                // Game Resolution Slider (50% - 100%)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Text("Game resolution", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.White)
-                    Text(
-                        "${cfg.resolution}% · ${if (cfg.resolution == 100) "Native" else "Scaled"}",
-                        color = Lilac, fontWeight = FontWeight.Bold, fontSize = 14.sp
-                    )
+                    Text("${cfg.resolution}% · ${if (cfg.resolution == 100) "Native" else "Scaled"}", color = Lilac, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                 }
                 Slider(
                     value = cfg.resolution.toFloat(),
@@ -455,14 +605,9 @@ fun LowGXApp() {
                     steps = 9,
                     colors = SliderDefaults.colors(thumbColor = Lilac, activeTrackColor = Lilac)
                 )
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("50% (High FPS)", fontSize = 11.sp, color = Color.White.copy(.5f))
-                    Text("100% (Native)", fontSize = 11.sp, color = Color.White.copy(.5f))
-                }
 
                 Spacer(Modifier.height(16.dp))
 
-                // FPS Limit
                 Text("FPS limit", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.White)
                 Spacer(Modifier.height(8.dp))
                 val fpsOptions = listOf("30", "60", "90", "120", "Max")
@@ -474,7 +619,6 @@ fun LowGXApp() {
 
                 Spacer(Modifier.height(16.dp))
 
-                // Anti-aliasing 4x MSAA
                 ToggleRow(
                     title = "Anti-aliasing 4x MSAA",
                     subtitle = "Applies after the game restarts",
@@ -484,7 +628,6 @@ fun LowGXApp() {
 
                 Spacer(Modifier.height(16.dp))
 
-                // Graphics Driver
                 Text("Graphics driver", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.White)
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -495,7 +638,6 @@ fun LowGXApp() {
                     }
                 }
 
-                // Low Texture Settings (Active when ANGLE is chosen)
                 if (cfg.driver == GpuDriver.Angle) {
                     Spacer(Modifier.height(18.dp))
                     Divider(color = Color.White.copy(alpha = 0.15f))
@@ -528,7 +670,6 @@ fun LowGXApp() {
                 Text("PERFORMANCE", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Lilac, letterSpacing = 1.5.sp)
                 Spacer(Modifier.height(14.dp))
 
-                // Game Mode
                 Text("Game Mode", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.White)
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -544,7 +685,6 @@ fun LowGXApp() {
 
                 Spacer(Modifier.height(16.dp))
 
-                // Fixed performance mode
                 ToggleRow(
                     title = "Fixed performance mode",
                     subtitle = "Lock CPU/GPU clocks for stability",
@@ -553,7 +693,6 @@ fun LowGXApp() {
 
                 Spacer(Modifier.height(14.dp))
 
-                // System animation
                 Text("System animation", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.White)
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -565,7 +704,7 @@ fun LowGXApp() {
                 }
             }
 
-            // ==================== NETWORK & BATTERY SECTION ====================
+            // ==================== NETWORK & POWER SECTION ====================
             Glass(Modifier.fillMaxWidth()) {
                 Text("NETWORK & POWER", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Lilac, letterSpacing = 1.5.sp)
                 Spacer(Modifier.height(10.dp))
@@ -594,14 +733,12 @@ fun LowGXApp() {
                 }
             }
 
-            // Status Output
             if (status.isNotEmpty()) {
                 Glass(Modifier.fillMaxWidth(), radius = 18) {
                     Text(status, color = Color(0xFF8DF5A8), fontSize = 12.sp)
                 }
             }
 
-            // Action Buttons
             Seg("Check ANGLE Support", false, Modifier.fillMaxWidth()) {
                 if (!Sh.granted()) { status = "Shizuku belum bersedia"; return@Seg }
                 scope.launch {
@@ -611,8 +748,8 @@ fun LowGXApp() {
                 }
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Seg("Reset to default", false, Modifier.weight(1f)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Seg("Reset", false, Modifier.weight(0.9f)) {
                     if (!Sh.granted()) { status = "Shizuku belum bersedia"; return@Seg }
                     scope.launch {
                         busy = true
@@ -623,7 +760,7 @@ fun LowGXApp() {
                         busy = false
                     }
                 }
-                Seg(if (busy) "Applying…" else "Save & Boost", true, Modifier.weight(1.5f)) {
+                Seg(if (busy) "…" else "Save & Boost", true, Modifier.weight(1.2f)) {
                     if (!Sh.granted()) { status = "Shizuku belum bersedia"; return@Seg }
                     scope.launch {
                         busy = true
@@ -631,6 +768,28 @@ fun LowGXApp() {
                             runCatching { applyAll(selected.toList(), cfg) }.getOrElse { it.message ?: "Ralat" }
                         }
                         busy = false
+                    }
+                }
+                // Butang Launch Terus Selepas Boost
+                Seg("🚀 Launch", true, Modifier.weight(1.2f)) {
+                    if (!Sh.granted()) { status = "Shizuku belum bersedia"; return@Seg }
+                    if (selected.isEmpty()) { status = "Sila pilih sekurang-kurangnya satu game."; return@Seg }
+                    scope.launch {
+                        busy = true
+                        status = withContext(Dispatchers.IO) {
+                            runCatching { applyAll(selected.toList(), cfg) }.getOrElse { it.message ?: "Ralat" }
+                        }
+                        busy = false
+                        // Lancarkan game pertama yang dipilih secara automatik
+                        runCatching {
+                            val targetPkg = selected.first().pkg
+                            val launchIntent = ctx.packageManager.getLaunchIntentForPackage(targetPkg)
+                            if (launchIntent != null) {
+                                ctx.startActivity(launchIntent)
+                            } else {
+                                status += "\nTidak dapat melancarkan pakej $targetPkg"
+                            }
+                        }
                     }
                 }
             }
