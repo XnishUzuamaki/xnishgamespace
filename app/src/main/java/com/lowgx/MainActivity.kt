@@ -1,4 +1,4 @@
-package com.lowgx
+package com.xnish.space
 
 import android.content.Context
 import android.content.pm.ApplicationInfo
