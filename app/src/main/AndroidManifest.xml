@@ -10,7 +10,9 @@
     </queries>
 
     <application
-        android:label="LowGX"
+        android:label="XNISHz"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
 
         <activity
@@ -28,6 +30,8 @@
             android:enabled="true"
             android:exported="true"
             android:multiprocess="false"
-            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL"
+            android:permission="android.permission.QUERY_ALL_PACKAGES" />
+
     </application>
 </manifest>
