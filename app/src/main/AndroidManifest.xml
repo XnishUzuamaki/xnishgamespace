@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <uses-permission
+        android:name="android.permission.QUERY_ALL_PACKAGES" />
+
     <queries>
         <package android:name="com.dts.freefiremax" />
         <package android:name="com.dts.freefireth" />
@@ -10,18 +13,20 @@
     </queries>
 
     <application
-        android:label="LowGX"
+        android:label="LowGX Space"
         android:icon="@drawable/lowgx_icon"
-    android:roundIcon="@drawable/lowgx_icon"
+        android:roundIcon="@drawable/lowgx_icon"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
 
         <activity
             android:name=".MainActivity"
             android:exported="true">
+
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
         </activity>
 
         <provider
@@ -30,8 +35,7 @@
             android:enabled="true"
             android:exported="true"
             android:multiprocess="false"
-            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL"
-            android:permission="android.permission.QUERY_ALL_PACKAGES" />
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
 
     </application>
 </manifest>
