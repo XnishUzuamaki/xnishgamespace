@@ -10,7 +10,7 @@
     </queries>
 
     <application
-        android:label="XNISHz"
+        android:label="LowGX"
         android:icon="@drawable/lowgx_icon"
     android:roundIcon="@drawable/lowgx_icon"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
