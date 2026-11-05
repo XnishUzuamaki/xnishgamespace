@@ -869,12 +869,12 @@ private fun LowGXApp() {
                         .border(1.dp, Color.White.copy(.48f), RoundedCornerShape(18.dp)),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("GX", color = Color(0xFF171329), fontSize = 21.sp, fontWeight = FontWeight.Black)
+                    Text("XN", color = Color(0xFF171329), fontSize = 21.sp, fontWeight = FontWeight.Black)
                 }
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
-                        "LOWGX",
+                        "XNISHz",
                         color = TextMain,
                         fontSize = 25.sp,
                         fontWeight = FontWeight.Black,
