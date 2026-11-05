@@ -53,6 +53,110 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.random.Random
 
+import android.os.Build
+import android.util.Log
+import android.widget.Toast
+import java.security.MessageDigest
+import java.util.Locale
+
+
+private object AppSecurity {
+
+    // Gantikan dengan SHA-256 sijil APK release XNISHz.
+    private const val EXPECTED_SHA256 =
+        "F36834732F213CACCC34D34DC8B46A52BAD77483E2556BC25179582492A04129"
+
+    fun checkSignature(context: Context): Boolean {
+        return runCatching {
+            val expected = EXPECTED_SHA256
+                .filterNot { it == ':' || it.isWhitespace() }
+                .uppercase(Locale.ROOT)
+
+            // Jangan benarkan fingerprint kosong atau tidak sah.
+            if (!expected.matches(Regex("[0-9A-F]{64}"))) {
+                return@runCatching false
+            }
+
+            val pm = context.packageManager
+
+            val signatures = if (
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+            ) {
+                val info = pm.getPackageInfo(
+                    context.packageName,
+                    PackageManager.GET_SIGNING_CERTIFICATES
+                )
+
+                val signingInfo = info.signingInfo
+                    ?: return@runCatching false
+
+                if (signingInfo.hasMultipleSigners()) {
+                    signingInfo.apkContentsSigners.toList()
+                } else {
+                    signingInfo.signingCertificateHistory.toList()
+                }
+
+            } else {
+                @Suppress("DEPRECATION")
+                val info = pm.getPackageInfo(
+                    context.packageName,
+                    PackageManager.GET_SIGNATURES
+                )
+
+                @Suppress("DEPRECATION")
+                info.signatures?.toList().orEmpty()
+            }
+
+            signatures.any { signature ->
+                val digest = MessageDigest
+                    .getInstance("SHA-256")
+                    .digest(signature.toByteArray())
+
+                val fingerprint = digest.joinToString("") {
+                    "%02X".format(
+                        Locale.ROOT,
+                        it.toInt() and 0xFF
+                    )
+                }
+
+                fingerprint.equals(expected, ignoreCase = true)
+            }
+
+        }.getOrDefault(false)
+    }
+
+    fun detectEmulator(): Boolean {
+        val brand = Build.BRAND.lowercase(Locale.ROOT)
+        val device = Build.DEVICE.lowercase(Locale.ROOT)
+        val model = Build.MODEL.lowercase(Locale.ROOT)
+        val manufacturer = Build.MANUFACTURER.lowercase(Locale.ROOT)
+        val product = Build.PRODUCT.lowercase(Locale.ROOT)
+        val fingerprint = Build.FINGERPRINT.lowercase(Locale.ROOT)
+        val hardware = Build.HARDWARE.lowercase(Locale.ROOT)
+
+        return (
+            (brand.startsWith("generic") &&
+                device.startsWith("generic")) ||
+
+            fingerprint.startsWith("generic") ||
+            fingerprint.contains("vbox") ||
+
+            model.contains("emulator") ||
+            model.contains("android sdk built for") ||
+
+            manufacturer.contains("genymotion") ||
+
+            hardware == "goldfish" ||
+            hardware == "ranchu" ||
+            hardware == "vbox86" ||
+
+            product.contains("sdk_gphone") ||
+            product.contains("emulator")
+        )
+    }
+}
+
+
 // -----------------------------------------------------------------------------
 // Shizuku helper
 // -----------------------------------------------------------------------------
@@ -323,16 +427,63 @@ private fun checkAngle(): String {
 // -----------------------------------------------------------------------------
 // Activity and crash screen
 // -----------------------------------------------------------------------------
+
+
+
+
 class MainActivity : ComponentActivity() {
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // 1. Signature Checker
+        val signatureValid = AppSecurity.checkSignature(this)
+
+        // Benarkan pembangunan/debug tanpa fingerprint release.
+        val isDebuggable =
+            (applicationInfo.flags and
+                android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+
+        if (!signatureValid) {
+
+            if (!isDebuggable) {
+                Toast.makeText(
+                    this,
+                    "XNISHz: Invalid APK Signature",
+                    Toast.LENGTH_LONG
+                ).show()
+
+                finish()
+                return
+            } else {
+                Log.w(
+                    "XNISHzSecurity",
+                    "Signature belum disahkan dalam debug build"
+                )
+            }
+        }
+
+        // 2. Emulator Detection
+        if (AppSecurity.detectEmulator()) {
+            Log.w(
+                "XNISHzSecurity",
+                "Emulator environment detected"
+            )
+        }
+
+        // 3. Load UI asal
         val crashFile = java.io.File(filesDir, "crash.txt")
-        val previousCrash = if (crashFile.exists()) crashFile.readText() else null
+        val previousCrash =
+            if (crashFile.exists()) crashFile.readText() else null
 
         Thread.setDefaultUncaughtExceptionHandler { _, error ->
-            runCatching { crashFile.writeText(error.stackTraceToString()) }
-            android.os.Process.killProcess(android.os.Process.myPid())
+            runCatching {
+                crashFile.writeText(error.stackTraceToString())
+            }
+
+            android.os.Process.killProcess(
+                android.os.Process.myPid()
+            )
         }
 
         setContent {
@@ -358,6 +509,9 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+
+
+    
 @Composable
 private fun CrashView(log: String, onClear: () -> Unit) {
     Box(Modifier.fillMaxSize().background(Ink).padding(20.dp)) {
