@@ -5,59 +5,72 @@ import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas as AndroidCanvas
-import android.graphics.Color as AndroidColor
-import android.graphics.Paint as AndroidPaint
-import android.graphics.Typeface
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
+import android.os.Build
 import android.os.Bundle
+import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import rikka.shizuku.Shizuku
+import java.security.MessageDigest
+import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.random.Random
-
-import android.os.Build
-import android.util.Log
-import android.widget.Toast
-import java.security.MessageDigest
-import java.util.Locale
 
 
 private object AppSecurity {
@@ -427,10 +440,6 @@ private fun checkAngle(): String {
 // -----------------------------------------------------------------------------
 // Activity and crash screen
 // -----------------------------------------------------------------------------
-
-
-
-
 class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -486,6 +495,17 @@ class MainActivity : ComponentActivity() {
             )
         }
 
+        // Edge-to-edge: aurora background draws behind status & navigation bars.
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        @Suppress("DEPRECATION")
+        window.statusBarColor = android.graphics.Color.TRANSPARENT
+        @Suppress("DEPRECATION")
+        window.navigationBarColor = android.graphics.Color.TRANSPARENT
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            isAppearanceLightStatusBars = false
+            isAppearanceLightNavigationBars = false
+        }
+
         setContent {
             MaterialTheme(
                 colorScheme = darkColorScheme(
@@ -509,12 +529,9 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-
-
-    
 @Composable
 private fun CrashView(log: String, onClear: () -> Unit) {
-    Box(Modifier.fillMaxSize().background(Ink).padding(20.dp)) {
+    Box(Modifier.fillMaxSize().background(Ink).statusBarsPadding().padding(20.dp)) {
         Column(Modifier.fillMaxSize()) {
             Text(
                 "LOWGX / CRASH REPORT",
@@ -534,23 +551,28 @@ private fun CrashView(log: String, onClear: () -> Unit) {
 }
 
 // -----------------------------------------------------------------------------
-// Liquid-glass palette
+// Palette
 // -----------------------------------------------------------------------------
-private val Ink = Color(0xFF080B14)
+private val Ink = Color(0xFF070A14)
 private val InkBlue = Color(0xFF10182A)
 private val Panel = Color(0xD9162034)
 private val PanelSoft = Color(0x99141D30)
 private val Accent = Color(0xFFB8A4FF)
 private val AccentSoft = Color(0xFF8D83D8)
 private val AccentDeep = Color(0xFF6957B8)
-private val TextMain = Color(0xFFF4F2FC)
-private val TextMuted = Color(0xFF9DA9C2)
+private val TextMain = Color(0xFFF7F6FF)
+private val TextMuted = Color(0xFFA7B1CB)
 private val StrokeGlass = Color(0x40E5E5FF)
-private val Good = Color(0xFF8BE0BC)
-private val Warm = Color(0xFFF0C98B)
+private val Good = Color(0xFF7BF0C0)
+private val Warm = Color(0xFFFFC98A)
+
+private val AuroraIndigo = Color(0xFF5B4BFF)
+private val AuroraCyan = Color(0xFF16B7D8)
+private val AuroraRose = Color(0xFFD14BC4)
+private val AuroraBlue = Color(0xFF2E6BFF)
 
 // -----------------------------------------------------------------------------
-// Moving zodiac constellations
+// Modern aurora background (slow drifting colour fields + faint star dust)
 // -----------------------------------------------------------------------------
 private data class StarParticle(
     val x: Float,
@@ -560,271 +582,347 @@ private data class StarParticle(
     val phase: Float
 )
 
-private data class ZodiacConstellation(
-    val symbol: String,
-    val x: Float,
-    val y: Float,
-    val points: List<Offset>,
-    val links: List<Pair<Int, Int>>
-)
-
 @Composable
-private fun ZodiacBackground() {
-    val particles = remember {
-        List(105) {
+private fun AuroraBackground() {
+    val stars = remember {
+        List(55) {
             StarParticle(
                 x = Random.nextFloat(),
                 y = Random.nextFloat(),
-                radius = Random.nextFloat() * 1.45f + 0.45f,
-                speed = Random.nextFloat() * 0.035f + 0.008f,
+                radius = Random.nextFloat() * 1.1f + 0.4f,
+                speed = Random.nextFloat() * 0.03f + 0.01f,
                 phase = Random.nextFloat() * (2f * PI.toFloat())
             )
         }
     }
 
-    val constellations = remember {
-        listOf(
-            ZodiacConstellation("♈", .15f, .16f, listOf(Offset(.18f,.18f), Offset(.43f,.35f), Offset(.62f,.23f), Offset(.82f,.43f)), listOf(0 to 1, 1 to 2, 2 to 3)),
-            ZodiacConstellation("♉", .78f, .12f, listOf(Offset(.16f,.20f), Offset(.37f,.45f), Offset(.60f,.20f), Offset(.79f,.48f), Offset(.60f,.76f)), listOf(0 to 1, 1 to 2, 2 to 3, 3 to 4)),
-            ZodiacConstellation("♊", .34f, .35f, listOf(Offset(.20f,.16f), Offset(.25f,.82f), Offset(.72f,.18f), Offset(.76f,.83f), Offset(.25f,.49f), Offset(.75f,.50f)), listOf(0 to 1, 2 to 3, 0 to 4, 4 to 5, 5 to 2)),
-            ZodiacConstellation("♋", .90f, .39f, listOf(Offset(.17f,.30f), Offset(.43f,.15f), Offset(.66f,.39f), Offset(.44f,.68f), Offset(.18f,.56f)), listOf(0 to 1, 1 to 2, 2 to 3, 3 to 4)),
-            ZodiacConstellation("♌", .13f, .57f, listOf(Offset(.18f,.25f), Offset(.42f,.18f), Offset(.61f,.40f), Offset(.80f,.22f), Offset(.65f,.72f)), listOf(0 to 1, 1 to 2, 2 to 3, 2 to 4)),
-            ZodiacConstellation("♍", .72f, .57f, listOf(Offset(.18f,.18f), Offset(.35f,.42f), Offset(.50f,.18f), Offset(.68f,.48f), Offset(.82f,.24f), Offset(.72f,.78f)), listOf(0 to 1, 1 to 2, 2 to 3, 3 to 4, 3 to 5)),
-            ZodiacConstellation("♎", .23f, .79f, listOf(Offset(.16f,.34f), Offset(.42f,.18f), Offset(.72f,.34f), Offset(.25f,.68f), Offset(.65f,.68f)), listOf(0 to 1, 1 to 2, 0 to 3, 3 to 4, 4 to 2)),
-            ZodiacConstellation("♏", .84f, .78f, listOf(Offset(.12f,.24f), Offset(.34f,.42f), Offset(.53f,.20f), Offset(.68f,.52f), Offset(.86f,.35f), Offset(.76f,.78f)), listOf(0 to 1, 1 to 2, 2 to 3, 3 to 4, 3 to 5)),
-            ZodiacConstellation("♐", .48f, .88f, listOf(Offset(.16f,.20f), Offset(.40f,.43f), Offset(.70f,.15f), Offset(.60f,.70f), Offset(.87f,.83f)), listOf(0 to 1, 1 to 2, 1 to 3, 3 to 4)),
-            ZodiacConstellation("♑", .06f, .34f, listOf(Offset(.16f,.20f), Offset(.38f,.48f), Offset(.62f,.22f), Offset(.81f,.55f)), listOf(0 to 1, 1 to 2, 2 to 3)),
-            ZodiacConstellation("♒", .56f, .19f, listOf(Offset(.14f,.32f), Offset(.34f,.18f), Offset(.55f,.38f), Offset(.76f,.18f), Offset(.86f,.55f)), listOf(0 to 1, 1 to 2, 2 to 3, 3 to 4)),
-            ZodiacConstellation("♓", .96f, .58f, listOf(Offset(.20f,.18f), Offset(.45f,.42f), Offset(.78f,.18f), Offset(.45f,.78f)), listOf(0 to 1, 1 to 2, 1 to 3))
-        )
-    }
-
-    val transition = rememberInfiniteTransition(label = "zodiac-motion")
+    val transition = rememberInfiniteTransition(label = "aurora")
     val progress by transition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(42000, easing = LinearEasing)),
-        label = "zodiac-progress"
+        animationSpec = infiniteRepeatable(tween(48000, easing = LinearEasing)),
+        label = "aurora-progress"
     )
 
-    val symbolPaint = remember {
-        AndroidPaint(AndroidPaint.ANTI_ALIAS_FLAG).apply {
-            typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
-            textAlign = AndroidPaint.Align.CENTER
+    Canvas(Modifier.fillMaxSize().background(Ink)) {
+        val w = size.width
+        val h = size.height
+        val a = progress * 2f * PI.toFloat()
+
+        drawRect(
+            Brush.verticalGradient(
+                listOf(Color(0xFF060914), Color(0xFF0A0F22), Color(0xFF070A18))
+            )
+        )
+
+        fun blob(cx: Float, cy: Float, r: Float, c: Color) {
+            drawCircle(
+                brush = Brush.radialGradient(
+                    listOf(c, Color.Transparent),
+                    center = Offset(cx, cy),
+                    radius = r
+                ),
+                radius = r,
+                center = Offset(cx, cy)
+            )
         }
-    }
 
-    Box(Modifier.fillMaxSize().background(Ink)) {
-        Canvas(Modifier.fillMaxSize()) {
-            val phase = progress * 2f * PI.toFloat()
+        blob(w * (.18f + .14f * sin(a)), h * (.14f + .07f * cos(a)), w * .95f, AuroraIndigo.copy(alpha = .60f))
+        blob(w * (.92f + .08f * cos(a * 2f)), h * (.42f + .08f * sin(a)), w * .85f, AuroraCyan.copy(alpha = .40f))
+        blob(w * (.10f + .10f * cos(a + 1.6f)), h * (.74f + .06f * sin(a * 2f)), w * .85f, AuroraRose.copy(alpha = .34f))
+        blob(w * (.82f + .08f * sin(a + 3f)), h * (.95f + .03f * cos(a)), w * .75f, AuroraBlue.copy(alpha = .38f))
 
-            drawRect(
-                Brush.verticalGradient(
-                    listOf(Color(0xFF0D1423), Color(0xFF090D18), Color(0xFF101329))
-                )
-            )
+        // Soft scrim so text stays readable on top of the colour fields.
+        drawRect(Ink.copy(alpha = .30f))
+
+        stars.forEach { star ->
+            val y = ((star.y - progress * star.speed * 10f) % 1f + 1f) % 1f
+            val x = star.x + sin(a * .35f + star.phase) * .006f
+            val alpha = .10f + .26f * ((sin(a * 2f + star.phase) + 1f) / 2f)
             drawCircle(
-                brush = Brush.radialGradient(
-                    listOf(Color(0x333E5AA1), Color.Transparent),
-                    center = Offset(size.width * .10f, size.height * .18f),
-                    radius = size.width * .66f
-                ),
-                radius = size.width * .66f,
-                center = Offset(size.width * .10f, size.height * .18f)
+                color = Color.White.copy(alpha = alpha),
+                radius = star.radius,
+                center = Offset(x * w, y * h)
             )
-            drawCircle(
-                brush = Brush.radialGradient(
-                    listOf(Color(0x222F6B83), Color.Transparent),
-                    center = Offset(size.width * .94f, size.height * .78f),
-                    radius = size.width * .58f
-                ),
-                radius = size.width * .58f,
-                center = Offset(size.width * .94f, size.height * .78f)
-            )
-
-            particles.forEach { star ->
-                val y = ((star.y - progress * star.speed * 10f) % 1f + 1f) % 1f
-                val x = star.x + sin(phase * .35f + star.phase) * .006f
-                val alpha = .16f + .30f * ((sin(phase + star.phase) + 1f) / 2f)
-                drawCircle(
-                    color = Color(0xFFD9D3FF).copy(alpha = alpha),
-                    radius = star.radius,
-                    center = Offset(x * size.width, y * size.height)
-                )
-            }
-
-            constellations.forEachIndexed { index, constellation ->
-                val driftX = sin(phase + index * .72f) * size.width * .008f
-                val driftY = cos(phase * .72f + index * .61f) * size.height * .006f
-                val center = Offset(
-                    constellation.x * size.width + driftX,
-                    constellation.y * size.height + driftY
-                )
-                val radiusX = size.width * .062f
-                val radiusY = size.height * .032f
-                val points = constellation.points.map { point ->
-                    Offset(
-                        center.x + (point.x - .5f) * radiusX * 2f,
-                        center.y + (point.y - .5f) * radiusY * 2f
-                    )
-                }
-
-                constellation.links.forEach { (from, to) ->
-                    drawLine(
-                        color = AccentSoft.copy(alpha = .17f),
-                        start = points[from],
-                        end = points[to],
-                        strokeWidth = 1.dp.toPx()
-                    )
-                }
-                points.forEachIndexed { pointIndex, point ->
-                    val pulse = .72f + .28f * sin(phase * 1.2f + pointIndex + index)
-                    drawCircle(
-                        color = Color(0xFFD8D0FF).copy(alpha = .52f * pulse),
-                        radius = 1.7.dp.toPx(),
-                        center = point
-                    )
-                    drawCircle(
-                        color = Accent.copy(alpha = .08f),
-                        radius = 5.dp.toPx(),
-                        center = point
-                    )
-                }
-
-                symbolPaint.textSize = 19.sp.toPx()
-                symbolPaint.color = AndroidColor.argb(34, 198, 187, 255)
-                drawContext.canvas.nativeCanvas.drawText(
-                    constellation.symbol,
-                    center.x,
-                    center.y + 7.dp.toPx(),
-                    symbolPaint
-                )
-            }
         }
     }
 }
 
 // -----------------------------------------------------------------------------
-// Reusable liquid-glass components
+// Liquid-glass building blocks
 // -----------------------------------------------------------------------------
+
+/**
+ * Liquid glass surface: dark translucent base, light veil, specular bloom in the
+ * top-left, tinted caustic in the bottom-right, a bright top edge and a gradient rim.
+ */
+private fun Modifier.liquidGlass(shape: Shape, tint: Color = Accent): Modifier = this
+    .clip(shape)
+    .background(Color(0x4D0A1022))
+    .background(
+        Brush.verticalGradient(
+            listOf(Color(0x2EFFFFFF), Color(0x12FFFFFF), Color(0x1CFFFFFF))
+        )
+    )
+    .drawBehind {
+        val w = size.width
+        val h = size.height
+        drawRect(
+            Brush.radialGradient(
+                listOf(Color.White.copy(alpha = .20f), Color.Transparent),
+                center = Offset(w * .12f, 0f),
+                radius = w * .75f
+            )
+        )
+        drawRect(
+            Brush.radialGradient(
+                listOf(tint.copy(alpha = .16f), Color.Transparent),
+                center = Offset(w, h),
+                radius = w * .7f
+            )
+        )
+        drawLine(
+            brush = Brush.horizontalGradient(
+                listOf(Color.Transparent, Color.White.copy(alpha = .55f), Color.Transparent)
+            ),
+            start = Offset(w * .10f, 1.dp.toPx()),
+            end = Offset(w * .90f, 1.dp.toPx()),
+            strokeWidth = 1.2.dp.toPx()
+        )
+    }
+    .border(
+        1.dp,
+        Brush.linearGradient(
+            listOf(
+                Color.White.copy(alpha = .60f),
+                Color.White.copy(alpha = .08f),
+                Color.White.copy(alpha = .02f),
+                Color.White.copy(alpha = .28f)
+            )
+        ),
+        shape
+    )
+
+/** Brighter glass used for the sliding selection thumb in segmented controls. */
+private fun Modifier.glassThumb(shape: Shape): Modifier = this
+    .clip(shape)
+    .background(Brush.verticalGradient(listOf(Color.White.copy(alpha = .36f), Accent.copy(alpha = .34f))))
+    .drawBehind {
+        drawRect(
+            Brush.radialGradient(
+                listOf(Color.White.copy(alpha = .35f), Color.Transparent),
+                center = Offset(size.width * .3f, 0f),
+                radius = size.width * .8f
+            )
+        )
+    }
+    .border(
+        1.dp,
+        Brush.verticalGradient(listOf(Color.White.copy(alpha = .75f), Color.White.copy(alpha = .12f))),
+        shape
+    )
+
 @Composable
 private fun Glass(
     modifier: Modifier = Modifier,
-    radius: Int = 25,
+    radius: Int = 30,
+    padding: Dp = 18.dp,
+    tint: Color = Accent,
     onClick: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
     val shape = RoundedCornerShape(radius.dp)
     Column(
         modifier = modifier
-            .clip(shape)
-            .background(
-                Brush.linearGradient(
-                    listOf(
-                        Color(0xE61C2940),
-                        Color(0xD9141D30),
-                        Color(0xCC111A2B)
-                    )
-                )
+            .shadow(
+                elevation = 22.dp,
+                shape = shape,
+                clip = false,
+                ambientColor = Color(0x66000000),
+                spotColor = Color(0x663A2FB0)
             )
-            .border(
-                width = 1.dp,
-                brush = Brush.linearGradient(
-                    listOf(Color.White.copy(.22f), Color.White.copy(.045f), Accent.copy(.17f))
-                ),
-                shape = shape
-            )
+            .liquidGlass(shape, tint)
             .let { base -> if (onClick != null) base.clickable { onClick() } else base }
-            .padding(17.dp),
+            .padding(padding),
         content = content
     )
 }
 
 @Composable
-private fun Eyebrow(text: String) {
-    Text(
-        text = text.uppercase(),
-        color = Accent.copy(alpha = .92f),
-        fontSize = 10.sp,
-        fontWeight = FontWeight.Bold,
-        letterSpacing = 1.8.sp
+private fun GlassDivider() {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(1.dp)
+            .background(Color.White.copy(alpha = .08f))
     )
 }
 
 @Composable
-private fun SectionHeading(
-    number: String,
-    title: String,
-    subtitle: String
-) {
-    Row(
-        Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
+private fun SectionHeading(glyph: String, title: String, subtitle: String) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Box(
             Modifier
-                .size(34.dp)
-                .clip(RoundedCornerShape(11.dp))
-                .background(Accent.copy(.13f))
-                .border(1.dp, Accent.copy(.22f), RoundedCornerShape(11.dp)),
+                .size(40.dp)
+                .liquidGlass(RoundedCornerShape(14.dp)),
             contentAlignment = Alignment.Center
         ) {
-            Text(number, color = Accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            Text(glyph, color = Accent, fontSize = 17.sp, fontWeight = FontWeight.Bold)
         }
-        Spacer(Modifier.width(11.dp))
+        Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(title, color = TextMain, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+            Text(title, color = TextMain, fontSize = 18.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.3).sp)
             Text(subtitle, color = TextMuted, fontSize = 11.sp)
         }
     }
 }
 
 @Composable
-private fun Seg(
-    text: String,
-    selected: Boolean,
+private fun FieldLabel(text: String, trailing: String? = null) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(text, color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+        if (trailing != null) {
+            Text(trailing, color = Accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+/** iOS-style segmented control with an animated liquid-glass thumb. */
+@Composable
+private fun GlassSegmented(
+    options: List<String>,
+    selectedIndex: Int,
     modifier: Modifier = Modifier,
-    sub: String? = null,
+    subs: List<String>? = null,
+    onSelect: (Int) -> Unit
+) {
+    val outer = RoundedCornerShape(21.dp)
+    val inner = RoundedCornerShape(18.dp)
+    val height = if (subs != null) 62.dp else 44.dp
+
+    BoxWithConstraints(
+        modifier
+            .height(height)
+            .clip(outer)
+            .background(Color(0x40000000))
+            .border(1.dp, Color.White.copy(alpha = .10f), outer)
+            .padding(3.dp)
+    ) {
+        val segmentWidth = maxWidth / options.size
+        val thumbOffset by animateDpAsState(
+            targetValue = segmentWidth * selectedIndex,
+            animationSpec = spring(dampingRatio = .72f, stiffness = 380f),
+            label = "segment-thumb"
+        )
+
+        Box(
+            Modifier
+                .offset(x = thumbOffset)
+                .width(segmentWidth)
+                .fillMaxHeight()
+                .glassThumb(inner)
+        )
+
+        Row(Modifier.fillMaxSize()) {
+            options.forEachIndexed { index, label ->
+                val selected = index == selectedIndex
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clip(inner)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { onSelect(index) }
+                        .padding(horizontal = 4.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        text = label,
+                        color = if (selected) Color.White else TextMuted,
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    val sub = subs?.getOrNull(index)
+                    if (sub != null) {
+                        Text(
+                            sub,
+                            color = if (selected) Color.White.copy(alpha = .75f) else TextMuted.copy(alpha = .7f),
+                            fontSize = 7.5.sp,
+                            letterSpacing = .4.sp,
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Pill button with a springy press animation. */
+@Composable
+private fun GlassButton(
+    text: String,
+    modifier: Modifier = Modifier,
+    primary: Boolean = false,
+    enabled: Boolean = true,
+    height: Dp = 46.dp,
+    horizontalPadding: Dp = 16.dp,
     onClick: () -> Unit
 ) {
-    val shape = RoundedCornerShape(14.dp)
-    Column(
-        modifier = modifier
-            .height(if (sub != null) 58.dp else 43.dp)
+    val shape = RoundedCornerShape(height / 2)
+    val source = remember { MutableInteractionSource() }
+    val pressed by source.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) .93f else 1f,
+        animationSpec = spring(Spring.DampingRatioMediumBouncy, Spring.StiffnessMedium),
+        label = "button-press"
+    )
+
+    Box(
+        modifier
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .alpha(if (enabled) 1f else .45f)
+            .height(height)
             .clip(shape)
             .background(
-                if (selected) Brush.linearGradient(
-                    listOf(Color(0xFFCEC2FF), Color(0xFFA99AF0))
-                ) else Brush.linearGradient(
-                    listOf(Color.White.copy(.075f), Color.White.copy(.035f))
+                if (primary) Brush.linearGradient(
+                    listOf(Color(0xFFE3DBFF), Color(0xFFA796FF), Color(0xFF7C6EF0))
+                ) else Brush.verticalGradient(
+                    listOf(Color.White.copy(alpha = .20f), Color.White.copy(alpha = .08f))
                 )
             )
+            .drawBehind {
+                drawRect(
+                    Brush.radialGradient(
+                        listOf(Color.White.copy(alpha = if (primary) .45f else .22f), Color.Transparent),
+                        center = Offset(size.width * .25f, 0f),
+                        radius = size.width * .9f
+                    )
+                )
+            }
             .border(
                 1.dp,
-                if (selected) Color.White.copy(.55f) else StrokeGlass.copy(.75f),
+                Brush.verticalGradient(
+                    listOf(Color.White.copy(alpha = if (primary) .85f else .45f), Color.White.copy(alpha = .08f))
+                ),
                 shape
             )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 5.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+            .clickable(interactionSource = source, indication = null, enabled = enabled, onClick = onClick)
+            .padding(horizontal = horizontalPadding),
+        contentAlignment = Alignment.Center
     ) {
         Text(
-            text = text,
-            color = if (selected) Color(0xFF171329) else TextMain,
-            fontWeight = FontWeight.SemiBold,
+            text,
+            color = if (primary) Color(0xFF181331) else TextMain,
             fontSize = 12.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
+            fontWeight = FontWeight.Bold,
+            maxLines = 1
         )
-        if (sub != null) {
-            Text(
-                sub,
-                color = if (selected) Color(0xFF393052).copy(.8f) else TextMuted,
-                fontSize = 8.sp,
-                maxLines = 1
-            )
-        }
     }
 }
 
@@ -840,43 +938,118 @@ private fun ToggleRow(
         Modifier.fillMaxWidth().padding(vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Column(Modifier.weight(1f).padding(end = 10.dp)) {
+        Column(Modifier.weight(1f).padding(end = 12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(title, color = TextMain, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                 if (badge != null) {
-                    Spacer(Modifier.width(7.dp))
+                    Spacer(Modifier.width(8.dp))
                     Text(
                         badge,
                         color = Warm,
                         fontSize = 8.sp,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier
-                            .clip(RoundedCornerShape(5.dp))
-                            .background(Warm.copy(.12f))
-                            .padding(horizontal = 6.dp, vertical = 3.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(Warm.copy(alpha = .14f))
+                            .border(1.dp, Warm.copy(alpha = .25f), RoundedCornerShape(50))
+                            .padding(horizontal = 7.dp, vertical = 3.dp)
                     )
                 }
             }
             Spacer(Modifier.height(3.dp))
-            Text(subtitle, color = TextMuted, fontSize = 10.sp, lineHeight = 14.sp)
+            Text(subtitle, color = TextMuted, fontSize = 10.5.sp, lineHeight = 14.5.sp)
         }
         Switch(
             checked = checked,
             onCheckedChange = onCheckedChange,
             colors = SwitchDefaults.colors(
-                checkedThumbColor = Ink,
-                checkedTrackColor = Accent,
-                checkedBorderColor = Accent,
-                uncheckedThumbColor = TextMuted,
-                uncheckedTrackColor = Color.White.copy(.12f),
-                uncheckedBorderColor = Color.White.copy(.15f)
+                checkedThumbColor = Color.White,
+                checkedTrackColor = Color(0xFF8F7BFF),
+                checkedBorderColor = Color.White.copy(alpha = .35f),
+                uncheckedThumbColor = Color.White.copy(alpha = .85f),
+                uncheckedTrackColor = Color.White.copy(alpha = .14f),
+                uncheckedBorderColor = Color.White.copy(alpha = .18f)
             )
         )
     }
 }
 
+@Composable
+private fun SelectCircle(selected: Boolean) {
+    Box(
+        Modifier
+            .size(24.dp)
+            .clip(CircleShape)
+            .background(
+                if (selected) Brush.linearGradient(listOf(Color(0xFFE3DBFF), Color(0xFF8F7BFF)))
+                else Brush.linearGradient(listOf(Color.White.copy(alpha = .06f), Color.White.copy(alpha = .06f)))
+            )
+            .border(
+                1.dp,
+                if (selected) Color.White.copy(alpha = .8f) else Color.White.copy(alpha = .25f),
+                CircleShape
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        if (selected) Text("✓", color = Color(0xFF181331), fontSize = 13.sp, fontWeight = FontWeight.Black)
+    }
+}
+
+@Composable
+private fun GlassSearchField(
+    value: String,
+    placeholder: String,
+    onValueChange: (String) -> Unit
+) {
+    val pill = RoundedCornerShape(50)
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        singleLine = true,
+        textStyle = TextStyle(color = TextMain, fontSize = 13.sp),
+        cursorBrush = SolidColor(Accent),
+        modifier = Modifier.fillMaxWidth(),
+        decorationBox = { inner ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .height(44.dp)
+                    .clip(pill)
+                    .background(Color(0x40000000))
+                    .border(1.dp, Color.White.copy(alpha = .10f), pill)
+                    .padding(horizontal = 15.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Canvas(Modifier.size(15.dp)) {
+                    val stroke = 1.6.dp.toPx()
+                    drawCircle(
+                        color = TextMuted,
+                        radius = size.width * .34f,
+                        center = Offset(size.width * .42f, size.height * .42f),
+                        style = Stroke(stroke)
+                    )
+                    drawLine(
+                        color = TextMuted,
+                        start = Offset(size.width * .68f, size.height * .68f),
+                        end = Offset(size.width * .95f, size.height * .95f),
+                        strokeWidth = stroke,
+                        cap = StrokeCap.Round
+                    )
+                }
+                Spacer(Modifier.width(9.dp))
+                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                    if (value.isEmpty()) {
+                        Text(placeholder, color = TextMuted.copy(alpha = .8f), fontSize = 12.sp)
+                    }
+                    inner()
+                }
+            }
+        }
+    )
+}
+
 // -----------------------------------------------------------------------------
-// Main LowGX screen
+// Main screen
 // -----------------------------------------------------------------------------
 @Composable
 private fun LowGXApp() {
@@ -995,229 +1168,249 @@ private fun LowGXApp() {
         }
     }
 
+    // Soft pulse for the connection dot
+    val pulseTransition = rememberInfiniteTransition(label = "pulse")
+    val pulse by pulseTransition.animateFloat(
+        initialValue = .35f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(1600, easing = LinearEasing)),
+        label = "pulse-alpha"
+    )
+
     Box(Modifier.fillMaxSize()) {
-        ZodiacBackground()
+        AuroraBackground()
 
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
                 .verticalScroll(rememberScrollState())
-                .padding(start = 18.dp, end = 18.dp, top = 13.dp, bottom = 128.dp),
+                .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 132.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // Brand header
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            // ---- Header ----
+            Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     Modifier
-                        .size(55.dp)
-                        .clip(RoundedCornerShape(18.dp))
+                        .size(54.dp)
+                        .clip(RoundedCornerShape(19.dp))
                         .background(
                             Brush.linearGradient(
-                                listOf(Color(0xFFD7CEFF), Color(0xFF8B7BDA), Color(0xFF514B91))
+                                listOf(Color(0xFFEDE8FF), Color(0xFF9D8CFF), Color(0xFF4F46C8))
                             )
                         )
-                        .border(1.dp, Color.White.copy(.48f), RoundedCornerShape(18.dp)),
+                        .drawBehind {
+                            drawRect(
+                                Brush.radialGradient(
+                                    listOf(Color.White.copy(alpha = .55f), Color.Transparent),
+                                    center = Offset(size.width * .2f, 0f),
+                                    radius = size.width
+                                )
+                            )
+                        }
+                        .border(
+                            1.dp,
+                            Brush.verticalGradient(listOf(Color.White.copy(alpha = .9f), Color.White.copy(alpha = .1f))),
+                            RoundedCornerShape(19.dp)
+                        ),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("XN", color = Color(0xFF171329), fontSize = 21.sp, fontWeight = FontWeight.Black)
+                    Text("XN", color = Color(0xFF171329), fontSize = 20.sp, fontWeight = FontWeight.Black)
                 }
-                Spacer(Modifier.width(12.dp))
+                Spacer(Modifier.width(13.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
                         "XNISHz",
                         color = TextMain,
-                        fontSize = 25.sp,
+                        fontSize = 28.sp,
                         fontWeight = FontWeight.Black,
-                        letterSpacing = 2.3.sp
+                        letterSpacing = (-0.5).sp
                     )
-                    Text("GAME CONTROL CENTER", color = TextMuted, fontSize = 9.sp, letterSpacing = 1.55.sp)
+                    Text("Game control center", color = TextMuted, fontSize = 12.sp)
                 }
-                Column(horizontalAlignment = Alignment.End) {
-                    Text("SPACE", color = Accent, fontWeight = FontWeight.Bold, fontSize = 10.sp, letterSpacing = 1.5.sp)
-                    Text("v1.0", color = TextMuted, fontSize = 10.sp)
-                }
+                Text(
+                    "Space  v1.0",
+                    color = TextMain,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .liquidGlass(RoundedCornerShape(50))
+                        .padding(horizontal = 12.dp, vertical = 7.dp)
+                )
             }
 
-            // Shizuku connection panel
-            Glass(Modifier.fillMaxWidth(), radius = 21, onClick = {
+            // ---- Shizuku status ----
+            Glass(Modifier.fillMaxWidth(), radius = 28, padding = 14.dp, onClick = {
                 if (Sh.alive() && !Sh.granted()) Sh.ask()
                 refreshShizuku()
             }) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
-                        Modifier
-                            .size(39.dp)
-                            .clip(CircleShape)
-                            .background(Color.White.copy(.07f))
-                            .border(1.dp, StrokeGlass, CircleShape),
+                        Modifier.size(42.dp).liquidGlass(CircleShape),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text("S", color = Accent, fontWeight = FontWeight.Bold, fontSize = 17.sp)
+                        Box(
+                            Modifier
+                                .size(11.dp)
+                                .clip(CircleShape)
+                                .background((if (Sh.granted()) Good else Warm).copy(alpha = if (Sh.granted()) pulse else 1f))
+                        )
                     }
-                    Spacer(Modifier.width(11.dp))
+                    Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
-                        Text("SHIZUKU SERVICE", color = TextMain, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                        Text("Shizuku", color = TextMain, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                         Text(shizukuStatus, color = if (Sh.granted()) Good else Warm, fontSize = 11.sp)
                     }
-                    Text("REFRESH  ↗", color = Accent, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = .7.sp)
+                    Text(
+                        "Segarkan",
+                        color = Accent,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(Accent.copy(alpha = .14f))
+                            .border(1.dp, Accent.copy(alpha = .28f), RoundedCornerShape(50))
+                            .padding(horizontal = 12.dp, vertical = 7.dp)
+                    )
                 }
             }
 
-            // Game library
-            Glass(Modifier.fillMaxWidth()) {
+            // ---- Game library ----
+            Glass(Modifier.fillMaxWidth(), radius = 32) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Eyebrow("Library / 01")
-                        Spacer(Modifier.height(4.dp))
-                        Text("Your games", color = TextMain, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                        Text("Pilih aplikasi yang mahu diuruskan.", color = TextMuted, fontSize = 11.sp)
+                        Text("Your games", color = TextMain, fontSize = 22.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.4).sp)
+                        Text("Pilih aplikasi yang mahu diuruskan.", color = TextMuted, fontSize = 11.5.sp)
                     }
-                    Column(horizontalAlignment = Alignment.End) {
-                        Text("${selected.size}", color = Accent, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                        Text("SELECTED", color = TextMuted, fontSize = 8.sp, letterSpacing = 1.sp)
+                    Box(
+                        Modifier.size(52.dp).liquidGlass(CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("${selected.size}", color = Accent, fontSize = 20.sp, fontWeight = FontWeight.Black)
+                            Text("dipilih", color = TextMuted, fontSize = 7.sp)
+                        }
                     }
                 }
 
-                Spacer(Modifier.height(15.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                    Seg("Games", showGamesOnly, Modifier.weight(1f)) { showGamesOnly = true }
-                    Seg("All apps · ${installedApps.size}", !showGamesOnly, Modifier.weight(1f)) { showGamesOnly = false }
-                    Seg(if (loadingApps) "…" else "↻ Scan", false, Modifier.width(75.dp)) {
-                        if (!loadingApps) scanApps()
-                    }
+                Spacer(Modifier.height(16.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    GlassSegmented(
+                        options = listOf("Games", "All apps · ${installedApps.size}"),
+                        selectedIndex = if (showGamesOnly) 0 else 1,
+                        modifier = Modifier.weight(1f)
+                    ) { showGamesOnly = it == 0 }
+                    GlassButton(
+                        text = if (loadingApps) "…" else "↻ Scan",
+                        enabled = !loadingApps,
+                        height = 44.dp,
+                        horizontalPadding = 14.dp
+                    ) { scanApps() }
                 }
 
                 Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
+                GlassSearchField(
                     value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    placeholder = {
-                        Text("Cari nama game atau package…", color = TextMuted, fontSize = 12.sp)
-                    },
-                    shape = RoundedCornerShape(14.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Accent.copy(.8f),
-                        unfocusedBorderColor = StrokeGlass,
-                        focusedTextColor = TextMain,
-                        unfocusedTextColor = TextMain,
-                        cursorColor = Accent,
-                        focusedContainerColor = Color.White.copy(.035f),
-                        unfocusedContainerColor = Color.White.copy(.025f)
-                    )
+                    placeholder = "Cari nama game atau package…",
+                    onValueChange = { searchQuery = it }
                 )
 
-                Spacer(Modifier.height(9.dp))
+                Spacer(Modifier.height(10.dp))
                 if (loadingApps) {
-                    Box(Modifier.fillMaxWidth().padding(vertical = 22.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
+                    Box(Modifier.fillMaxWidth().padding(vertical = 24.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(26.dp))
                     }
                 } else if (filteredApps.isEmpty()) {
                     Text(
                         "Tiada aplikasi ditemui. Cuba tab All apps.",
                         color = TextMuted,
-                        fontSize = 11.sp,
-                        modifier = Modifier.padding(vertical = 17.dp)
+                        fontSize = 11.5.sp,
+                        modifier = Modifier.padding(vertical = 18.dp)
                     )
                 } else {
                     Column(
-                        Modifier.fillMaxWidth().heightIn(max = 255.dp).verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                        Modifier.fillMaxWidth().heightIn(max = 260.dp).verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         filteredApps.forEach { game ->
                             val isSelected = game.pkg in selectedPackages
+                            val rowShape = RoundedCornerShape(18.dp)
                             Row(
                                 Modifier
                                     .fillMaxWidth()
-                                    .clip(RoundedCornerShape(13.dp))
-                                    .background(if (isSelected) Accent.copy(.105f) else Color.Transparent)
+                                    .clip(rowShape)
+                                    .background(if (isSelected) Accent.copy(alpha = .14f) else Color.Transparent)
+                                    .border(
+                                        1.dp,
+                                        if (isSelected) Accent.copy(alpha = .35f) else Color.Transparent,
+                                        rowShape
+                                    )
                                     .clickable {
                                         if (isSelected) selected.removeAll { it.pkg == game.pkg }
                                         else selected.add(game)
                                     }
-                                    .padding(horizontal = 7.dp, vertical = 7.dp),
+                                    .padding(horizontal = 9.dp, vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 if (game.icon != null) {
                                     Image(
                                         bitmap = game.icon,
                                         contentDescription = game.name,
-                                        modifier = Modifier.size(36.dp).clip(RoundedCornerShape(10.dp))
+                                        modifier = Modifier.size(40.dp).clip(RoundedCornerShape(12.dp))
                                     )
                                 } else {
                                     Box(
-                                        Modifier.size(36.dp).clip(RoundedCornerShape(10.dp)).background(Color.White.copy(.07f)),
+                                        Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(Color.White.copy(alpha = .08f)),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Text("APP", color = TextMuted, fontSize = 8.sp, fontWeight = FontWeight.Bold)
                                     }
                                 }
-                                Spacer(Modifier.width(10.dp))
+                                Spacer(Modifier.width(11.dp))
                                 Column(Modifier.weight(1f)) {
-                                    Text(game.name, color = TextMain, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    Text(game.pkg, color = TextMuted, fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(game.name, color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(game.pkg, color = TextMuted, fontSize = 9.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
-                                Checkbox(
-                                    checked = isSelected,
-                                    onCheckedChange = { checked ->
-                                        if (checked) selected.add(game)
-                                        else selected.removeAll { it.pkg == game.pkg }
-                                    },
-                                    colors = CheckboxDefaults.colors(
-                                        checkedColor = Accent,
-                                        checkmarkColor = Ink,
-                                        uncheckedColor = TextMuted
-                                    )
-                                )
+                                Spacer(Modifier.width(8.dp))
+                                SelectCircle(isSelected)
                             }
                         }
                     }
                 }
             }
 
-            // Graphics panel
-            Glass(Modifier.fillMaxWidth()) {
-                SectionHeading("01", "Graphics", "Visual quality and frame-rate options")
-                Spacer(Modifier.height(17.dp))
+            // ---- Graphics ----
+            Glass(Modifier.fillMaxWidth(), radius = 32) {
+                SectionHeading("◈", "Graphics", "Visual quality and frame-rate options")
+                Spacer(Modifier.height(18.dp))
 
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text("Game resolution", color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                    Text(
-                        "${config.resolution}%  ·  ${if (config.resolution == 100) "Native" else "Scaled"}",
-                        color = Accent,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
+                FieldLabel(
+                    "Game resolution",
+                    "${config.resolution}%  ·  ${if (config.resolution == 100) "Native" else "Scaled"}"
+                )
                 Slider(
                     value = config.resolution.toFloat(),
                     onValueChange = { config = config.copy(resolution = (it / 5).roundToInt() * 5) },
                     valueRange = 50f..100f,
                     steps = 9,
                     colors = SliderDefaults.colors(
-                        thumbColor = Accent,
+                        thumbColor = Color.White,
                         activeTrackColor = Accent,
-                        inactiveTrackColor = Color.White.copy(.13f)
+                        inactiveTrackColor = Color.White.copy(alpha = .14f)
                     )
                 )
 
-                Spacer(Modifier.height(9.dp))
-                Text("FPS limit", color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf("30", "60", "90", "120", "Max").forEach { fps ->
-                        Seg(fps, config.fps == fps, Modifier.weight(1f)) {
-                            config = config.copy(fps = fps)
-                        }
-                    }
-                }
+                FieldLabel("FPS limit")
+                Spacer(Modifier.height(9.dp))
+                val fpsOptions = listOf("30", "60", "90", "120", "Max")
+                GlassSegmented(
+                    options = fpsOptions,
+                    selectedIndex = fpsOptions.indexOf(config.fps).coerceAtLeast(0),
+                    modifier = Modifier.fillMaxWidth()
+                ) { config = config.copy(fps = fpsOptions[it]) }
 
-                Spacer(Modifier.height(13.dp))
+                Spacer(Modifier.height(14.dp))
                 ToggleRow(
                     title = "4x MSAA",
                     subtitle = "Pilihan ini mungkin tidak disokong oleh semua GPU.",
@@ -1225,67 +1418,59 @@ private fun LowGXApp() {
                     badge = "ADVANCED"
                 ) { config = config.copy(msaa4x = it) }
 
-                Spacer(Modifier.height(13.dp))
-                Divider(color = StrokeGlass)
-                Spacer(Modifier.height(13.dp))
-                Text("Graphics driver", color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    GpuDriver.values().forEach { driver ->
-                        Seg(
-                            driver.label,
-                            config.driver == driver,
-                            Modifier.weight(1f),
-                            sub = driver.sub
-                        ) { config = config.copy(driver = driver) }
-                    }
-                }
+                Spacer(Modifier.height(14.dp))
+                GlassDivider()
+                Spacer(Modifier.height(14.dp))
+                FieldLabel("Graphics driver")
+                Spacer(Modifier.height(9.dp))
+                val drivers = GpuDriver.values().toList()
+                GlassSegmented(
+                    options = drivers.map { it.label },
+                    subs = drivers.map { it.sub },
+                    selectedIndex = drivers.indexOf(config.driver),
+                    modifier = Modifier.fillMaxWidth()
+                ) { config = config.copy(driver = drivers[it]) }
 
                 if (config.driver == GpuDriver.Angle) {
-                    Spacer(Modifier.height(15.dp))
-                    Divider(color = StrokeGlass)
+                    Spacer(Modifier.height(16.dp))
+                    GlassDivider()
+                    Spacer(Modifier.height(14.dp))
+                    FieldLabel("ANGLE texture profile")
+                    Spacer(Modifier.height(9.dp))
+                    GlassSegmented(
+                        options = listOf("Smooth", "Pixel"),
+                        selectedIndex = if (config.texMode == TexMode.Blur) 0 else 1,
+                        modifier = Modifier.fillMaxWidth()
+                    ) { config = config.copy(texMode = if (it == 0) TexMode.Blur else TexMode.Pixel) }
+
                     Spacer(Modifier.height(13.dp))
-                    Text("ANGLE texture profile", color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    FieldLabel("Texture LOD", "Level ${config.texLevel}")
                     Spacer(Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                        Seg("Smooth", config.texMode == TexMode.Blur, Modifier.weight(1f)) {
-                            config = config.copy(texMode = TexMode.Blur)
-                        }
-                        Seg("Pixel", config.texMode == TexMode.Pixel, Modifier.weight(1f)) {
-                            config = config.copy(texMode = TexMode.Pixel)
-                        }
-                    }
-                    Spacer(Modifier.height(12.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Texture LOD", color = TextMuted, fontSize = 11.sp)
-                        Text("Level ${config.texLevel}", color = Accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    }
-                    Spacer(Modifier.height(7.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                        (1..4).forEach { level ->
-                            Seg("$level", config.texLevel == level, Modifier.weight(1f)) {
-                                config = config.copy(texLevel = level)
-                            }
-                        }
-                    }
+                    GlassSegmented(
+                        options = listOf("1", "2", "3", "4"),
+                        selectedIndex = (config.texLevel - 1).coerceIn(0, 3),
+                        modifier = Modifier.fillMaxWidth()
+                    ) { config = config.copy(texLevel = it + 1) }
                 }
             }
 
-            // Performance panel
-            Glass(Modifier.fillMaxWidth()) {
-                SectionHeading("02", "Performance", "Android game mode and interface behaviour")
-                Spacer(Modifier.height(16.dp))
-                Text("Game mode", color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                    GameModeOpt.values().forEach { mode ->
-                        Seg(mode.label, config.gameMode == mode, Modifier.weight(1f)) {
-                            config = config.copy(
-                                gameMode = mode,
-                                batterySaver = if (mode == GameModeOpt.Saver) true else config.batterySaver
-                            )
-                        }
-                    }
+            // ---- Performance ----
+            Glass(Modifier.fillMaxWidth(), radius = 32) {
+                SectionHeading("⚡", "Performance", "Android game mode and interface behaviour")
+                Spacer(Modifier.height(17.dp))
+                FieldLabel("Game mode")
+                Spacer(Modifier.height(9.dp))
+                val modes = GameModeOpt.values().toList()
+                GlassSegmented(
+                    options = modes.map { it.label },
+                    selectedIndex = modes.indexOf(config.gameMode),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    val mode = modes[it]
+                    config = config.copy(
+                        gameMode = mode,
+                        batterySaver = if (mode == GameModeOpt.Saver) true else config.batterySaver
+                    )
                 }
 
                 Spacer(Modifier.height(14.dp))
@@ -1295,24 +1480,23 @@ private fun LowGXApp() {
                     checked = config.fixedPerf
                 ) { config = config.copy(fixedPerf = it) }
 
-                Spacer(Modifier.height(12.dp))
-                Divider(color = StrokeGlass)
-                Spacer(Modifier.height(12.dp))
-                Text("System animation", color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                    AnimSpeed.values().forEach { speed ->
-                        Seg(speed.label, config.animSpeed == speed, Modifier.weight(1f)) {
-                            config = config.copy(animSpeed = speed)
-                        }
-                    }
-                }
+                Spacer(Modifier.height(13.dp))
+                GlassDivider()
+                Spacer(Modifier.height(13.dp))
+                FieldLabel("System animation")
+                Spacer(Modifier.height(9.dp))
+                val speeds = AnimSpeed.values().toList()
+                GlassSegmented(
+                    options = speeds.map { it.label },
+                    selectedIndex = speeds.indexOf(config.animSpeed),
+                    modifier = Modifier.fillMaxWidth()
+                ) { config = config.copy(animSpeed = speeds[it]) }
             }
 
-            // Network and power panel
-            Glass(Modifier.fillMaxWidth()) {
-                SectionHeading("03", "Network & power", "Connection preferences and battery behaviour")
-                Spacer(Modifier.height(15.dp))
+            // ---- Network & power ----
+            Glass(Modifier.fillMaxWidth(), radius = 32) {
+                SectionHeading("◎", "Network & power", "Connection preferences and battery behaviour")
+                Spacer(Modifier.height(16.dp))
                 ToggleRow(
                     title = "Wi-Fi & DNS preferences",
                     subtitle = "Mengubah imbasan latar dan Private DNS. Ia tidak menjamin ping lebih rendah.",
@@ -1321,7 +1505,7 @@ private fun LowGXApp() {
                 ) { config = config.copy(netBoost = it) }
 
                 Spacer(Modifier.height(12.dp))
-                Divider(color = StrokeGlass)
+                GlassDivider()
                 Spacer(Modifier.height(12.dp))
                 ToggleRow(
                     title = "Battery saver",
@@ -1336,25 +1520,30 @@ private fun LowGXApp() {
                 }
             }
 
+            // ---- Status message ----
             if (statusMessage.isNotBlank()) {
-                Glass(Modifier.fillMaxWidth(), radius = 17) {
+                Glass(Modifier.fillMaxWidth(), radius = 24, padding = 15.dp) {
                     Row(verticalAlignment = Alignment.Top) {
                         Box(
-                            Modifier.size(7.dp).clip(CircleShape)
+                            Modifier
+                                .padding(top = 4.dp)
+                                .size(8.dp)
+                                .clip(CircleShape)
                                 .background(if (statusMessage.startsWith("Ralat")) Warm else Good)
                         )
-                        Spacer(Modifier.width(9.dp))
+                        Spacer(Modifier.width(10.dp))
                         Text(
                             statusMessage,
                             color = TextMain,
-                            fontSize = 11.sp,
-                            lineHeight = 16.sp
+                            fontSize = 11.5.sp,
+                            lineHeight = 16.5.sp
                         )
                     }
                 }
             }
 
-            Glass(Modifier.fillMaxWidth(), radius = 17, onClick = {
+            // ---- Check ANGLE ----
+            Glass(Modifier.fillMaxWidth(), radius = 26, padding = 15.dp, onClick = {
                 if (!Sh.granted()) {
                     statusMessage = "Shizuku belum diberi kebenaran."
                 } else {
@@ -1368,73 +1557,53 @@ private fun LowGXApp() {
                 }
             }) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("CHECK ANGLE SUPPORT", color = TextMain, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                    Spacer(Modifier.weight(1f))
-                    Text("↗", color = Accent, fontSize = 17.sp)
+                    Column(Modifier.weight(1f)) {
+                        Text("Check ANGLE support", color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        Text("Semak sama ada ANGLE wujud pada sistem.", color = TextMuted, fontSize = 10.5.sp)
+                    }
+                    Text("↗", color = Accent, fontSize = 18.sp)
                 }
             }
 
             Text(
-                "LOWGX SPACE  •  GRAPHICS / PERFORMANCE / CONTROL",
-                color = TextMuted.copy(.65f),
-                fontSize = 8.sp,
-                letterSpacing = 1.1.sp,
+                "XNISHz Space  ·  Graphics  ·  Performance  ·  Control",
+                color = TextMuted.copy(alpha = .6f),
+                fontSize = 9.sp,
                 modifier = Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 8.dp)
             )
         }
 
-        // Floating action dock
+        // ---- Floating glass dock ----
         Glass(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .navigationBarsPadding()
-                .padding(horizontal = 14.dp, vertical = 9.dp),
-            radius = 23
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            radius = 36,
+            padding = 11.dp
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("${selected.size} GAME${if (selected.size == 1) "" else "S"} SELECTED", color = TextMuted, fontSize = 8.sp, letterSpacing = 1.sp)
-                    Text(if (busy) "Applying settings…" else "Ready to apply", color = TextMain, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                }
-                OutlinedButton(
-                    onClick = { runReset() },
-                    enabled = !busy,
-                    contentPadding = PaddingValues(horizontal = 11.dp, vertical = 9.dp),
-                    shape = RoundedCornerShape(13.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, StrokeGlass),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = TextMain)
-                ) {
-                    Text("Reset", fontSize = 10.sp)
-                }
-                Spacer(Modifier.width(7.dp))
-                Button(
-                    onClick = { runApply() },
-                    enabled = !busy,
-                    contentPadding = PaddingValues(horizontal = 13.dp, vertical = 10.dp),
-                    shape = RoundedCornerShape(13.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Accent,
-                        contentColor = Ink,
-                        disabledContainerColor = Accent.copy(.35f)
+                Column(Modifier.weight(1f).padding(start = 8.dp)) {
+                    Text(
+                        "${selected.size} game${if (selected.size == 1) "" else "s"}",
+                        color = TextMain,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
                     )
-                ) {
-                    Text(if (busy) "…" else "Apply", fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                }
-                Spacer(Modifier.width(7.dp))
-                Button(
-                    onClick = { launchSelectedGame() },
-                    enabled = !busy,
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
-                    shape = RoundedCornerShape(13.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFF27334D),
-                        contentColor = TextMain,
-                        disabledContainerColor = Color(0xFF27334D).copy(.45f)
+                    Text(
+                        if (busy) "Applying settings…" else "Ready to apply",
+                        color = TextMuted,
+                        fontSize = 10.sp,
+                        maxLines = 1
                     )
-                ) {
-                    Text("Launch  ↗", fontSize = 10.sp, fontWeight = FontWeight.Bold)
                 }
+                GlassButton("Reset", enabled = !busy, horizontalPadding = 14.dp) { runReset() }
+                Spacer(Modifier.width(6.dp))
+                GlassButton(if (busy) "…" else "Apply", primary = true, enabled = !busy, horizontalPadding = 16.dp) { runApply() }
+                Spacer(Modifier.width(6.dp))
+                GlassButton("Launch ↗", enabled = !busy, horizontalPadding = 14.dp) { launchSelectedGame() }
             }
         }
     }
