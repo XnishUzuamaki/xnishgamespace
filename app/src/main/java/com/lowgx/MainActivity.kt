@@ -1322,8 +1322,7 @@ private fun LowGXApp() {
                         }
                         activeGameForSettings = game
                         currentTab = NavTab.Settings
-                    },
-                    onProfileClick = { currentTab = NavTab.Profile }
+                    }
                 )
 
                 NavTab.Profile -> ProfilePage(
@@ -1415,8 +1414,7 @@ private fun HomePage(
     loadingApps: Boolean,
     onEnterGameSpace: () -> Unit,
     onOpenAddModal: () -> Unit,
-    onPlayGame: (Game) -> Unit,
-    onProfileClick: () -> Unit
+    onPlayGame: (Game) -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -1437,44 +1435,6 @@ private fun HomePage(
                 letterSpacing = (-0.6).sp,
                 modifier = Modifier.weight(1f)
             )
-            Column(horizontalAlignment = Alignment.End, modifier = Modifier.padding(end = 12.dp)) {
-                Text(
-                    text = "CALLSIGN ID",
-                    color = TextMuted.copy(alpha = .75f),
-                    fontSize = 9.5.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.4.sp
-                )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    text = "XNISH-VIP",
-                    color = CyanAccent,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    letterSpacing = 1.8.sp
-                )
-            }
-            Box(
-                Modifier
-                    .size(44.dp)
-                    .liquidGlass(CircleShape, CyanAccent, deepTint = true)
-                    .clickable { onProfileClick() },
-                contentAlignment = Alignment.Center
-            ) {
-                Canvas(Modifier.size(18.dp)) {
-                    val s = Stroke(1.8.dp.toPx(), cap = StrokeCap.Round)
-                    drawCircle(CyanAccent, radius = size.width * 0.26f, center = Offset(size.width * 0.5f, size.height * 0.32f), style = s)
-                    drawArc(
-                        color = CyanAccent,
-                        startAngle = 200f,
-                        sweepAngle = 140f,
-                        useCenter = false,
-                        topLeft = Offset(size.width * 0.16f, size.height * 0.58f),
-                        size = Size(size.width * 0.68f, size.height * 0.52f),
-                        style = s
-                    )
-                }
-            }
         }
 
         Spacer(Modifier.height(26.dp))
@@ -1601,65 +1561,6 @@ private fun HomePage(
                     contentAlignment = Alignment.Center
                 ) {
                     Text("→", color = Color(0xFF07101E), fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                }
-            }
-
-            Spacer(Modifier.height(20.dp))
-
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    Modifier
-                        .size(28.dp)
-                        .clip(CircleShape)
-                        .background(CyanAccent.copy(alpha = .16f))
-                        .border(1.2.dp, CyanAccent.copy(alpha = .75f), CircleShape),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("X", color = CyanAccent, fontSize = 12.sp, fontWeight = FontWeight.Black)
-                }
-                Spacer(Modifier.width(10.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        text = "Premium",
-                        color = CyanAccent.copy(alpha = .9f),
-                        fontSize = 10.5.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Row(verticalAlignment = Alignment.Bottom) {
-                        Text(
-                            text = "Token ",
-                            color = TextMain,
-                            fontSize = 20.sp,
-                            fontWeight = FontWeight.ExtraBold
-                        )
-                        Text(
-                            text = "Unlimited",
-                            color = TextMuted,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.padding(bottom = 2.dp)
-                        )
-                    }
-                }
-
-                GlowingProgressBar(
-                    progress = 1f,
-                    modifier = Modifier.width(86.dp),
-                    height = 5.dp
-                )
-
-                Spacer(Modifier.width(10.dp))
-
-                Box(
-                    Modifier
-                        .size(34.dp)
-                        .liquidGlass(CircleShape, CyanAccent),
-                    contentAlignment = Alignment.Center
-                ) {
-                    MedalBadgeIcon(Modifier.size(18.dp), CyanAccent)
                 }
             }
         }
@@ -1930,12 +1831,6 @@ private fun ProfilePage(
     val secs = sessionSeconds % 60
     val formattedSession = String.format(Locale.US, "%02d:%02d:%02d", hrs, mins, secs)
 
-    val perfScore = remember(stats, shizukuGranted) {
-        val base = if (shizukuGranted) 78 else 58
-        val ramBonus = ((100 - stats.ramPercent) * 0.18f).roundToInt()
-        (base + ramBonus).coerceIn(52, 99)
-    }
-
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -2010,79 +1905,6 @@ private fun ProfilePage(
                     fontFamily = FontFamily.Monospace
                 )
             }
-
-            Spacer(Modifier.height(16.dp))
-
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "Level",
-                    color = TextMuted,
-                    fontSize = 13.5.sp,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.weight(1f)
-                )
-                Text(
-                    text = "LV ",
-                    color = TextMuted,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = if (shizukuGranted) "3" else "1",
-                    color = TextMain,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.ExtraBold
-                )
-            }
-            Spacer(Modifier.height(8.dp))
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                repeat(3) { idx ->
-                    val active = if (shizukuGranted) true else idx == 0
-                    Box(
-                        Modifier
-                            .weight(1f)
-                            .height(5.dp)
-                            .clip(RoundedCornerShape(50))
-                            .background(
-                                if (active) CyanAccent.copy(alpha = .85f)
-                                else Color.White.copy(alpha = .12f)
-                            )
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(16.dp))
-
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "Performance Score",
-                    color = TextMuted,
-                    fontSize = 13.5.sp,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.weight(1f)
-                )
-                Text(
-                    text = "$perfScore",
-                    color = TextMain,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.ExtraBold
-                )
-                Text(
-                    text = " / 100",
-                    color = TextMuted,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-            }
-            Spacer(Modifier.height(9.dp))
-            GlowingProgressBar(
-                progress = perfScore / 100f,
-                modifier = Modifier.fillMaxWidth(),
-                height = 6.dp
-            )
         }
 
         Spacer(Modifier.height(26.dp))
