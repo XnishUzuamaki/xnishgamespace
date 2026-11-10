@@ -213,6 +213,12 @@ object Sh {
 }
 
 // -----------------------------------------------------------------------------
+// Helper for Safe Decimal Formatting (Prevents IllegalFormatConversionException)
+// -----------------------------------------------------------------------------
+private fun Float.fmt1(): String = String.format(Locale.US, "%.1f", this)
+private fun Float.fmt2(): String = String.format(Locale.US, "%.2f", this)
+
+// -----------------------------------------------------------------------------
 // Models & Installed-App Scanner
 // -----------------------------------------------------------------------------
 data class Game(
@@ -709,7 +715,6 @@ private val CyanAccent = Color(0xFF7CE8FF)
 private val CyanGlow = Color(0xFF2CBDFB)
 private val CyanDeep = Color(0xFF0E3E5C)
 private val Accent = Color(0xFFA896FF)
-private val AccentSoft = Color(0xFF8D83D8)
 private val TextMain = Color(0xFFF5F9FF)
 private val TextMuted = Color(0xFF8A9AB5)
 private val Good = Color(0xFF67F2C2)
@@ -1075,7 +1080,6 @@ private fun LowGXApp() {
     var statusMessage by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
 
-    // Session timer & live telemetry
     val sessionStartMs = remember { SystemClock.elapsedRealtime() }
     var sessionSeconds by remember { mutableLongStateOf(0L) }
     var liveFps by remember { mutableIntStateOf(120) }
@@ -1107,7 +1111,6 @@ private fun LowGXApp() {
         scanApps()
     }
 
-    // Live Choreographer FPS Counter
     DisposableEffect(Unit) {
         var frames = 0
         var lastNs = System.nanoTime()
@@ -1128,7 +1131,6 @@ private fun LowGXApp() {
         onDispose { choreographer.removeFrameCallback(callback) }
     }
 
-    // 1-second session clock
     LaunchedEffect(Unit) {
         while (true) {
             sessionSeconds = (SystemClock.elapsedRealtime() - sessionStartMs) / 1000L
@@ -1136,7 +1138,6 @@ private fun LowGXApp() {
         }
     }
 
-    // Hardware telemetry loop
     LaunchedEffect(Unit) {
         while (true) {
             val updated = withContext(Dispatchers.IO) {
@@ -1371,7 +1372,6 @@ private fun LowGXApp() {
             }
         }
 
-        // Floating Bottom Navigation Pill
         FloatingBottomNavBar(
             currentTab = currentTab,
             onSelectTab = { currentTab = it },
@@ -1381,7 +1381,6 @@ private fun LowGXApp() {
                 .padding(bottom = 14.dp)
         )
 
-        // Add / Manage Game Library Modal Dialog
         if (showAddGameModal) {
             AddGameLibraryModal(
                 installedApps = installedApps,
@@ -1408,7 +1407,7 @@ private fun LowGXApp() {
 }
 
 // -----------------------------------------------------------------------------
-// PAGE 1: HOME SCREEN (ZAYON / XNISHz Inspired Liquid Glass)
+// PAGE 1: HOME SCREEN
 // -----------------------------------------------------------------------------
 @Composable
 private fun HomePage(
@@ -1426,7 +1425,6 @@ private fun HomePage(
             .verticalScroll(rememberScrollState())
             .padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 120.dp)
     ) {
-        // ---- Top Row: Home & Profile Button ----
         Row(
             Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
@@ -1481,7 +1479,6 @@ private fun HomePage(
 
         Spacer(Modifier.height(26.dp))
 
-        // ---- Hero Emblem & Brand Identity ----
         Row(
             Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
@@ -1490,7 +1487,6 @@ private fun HomePage(
                 modifier = Modifier.size(112.dp),
                 contentAlignment = Alignment.Center
             ) {
-                // Outer neon aura bloom
                 Box(
                     Modifier
                         .size(112.dp)
@@ -1501,7 +1497,6 @@ private fun HomePage(
                             )
                         )
                 )
-                // Inner dark liquid orb
                 Box(
                     Modifier
                         .size(94.dp)
@@ -1561,7 +1556,6 @@ private fun HomePage(
 
         Spacer(Modifier.height(26.dp))
 
-        // ---- Enter Game Space Card ----
         Glass(
             modifier = Modifier.fillMaxWidth(),
             radius = 28,
@@ -1672,7 +1666,6 @@ private fun HomePage(
 
         Spacer(Modifier.height(26.dp))
 
-        // ---- Game Library Header + Add Button ----
         Row(
             Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
@@ -1710,7 +1703,6 @@ private fun HomePage(
 
         Spacer(Modifier.height(14.dp))
 
-        // ---- Game Library Cards ----
         if (loadingApps) {
             Glass(Modifier.fillMaxWidth(), radius = 28, padding = 32.dp) {
                 Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -1769,7 +1761,6 @@ private fun GameShowcaseCard(
             .background(Color(0xFF0A1320))
             .clickable { onPlayClick() }
     ) {
-        // Blurred ambient game icon backdrop
         if (game.icon != null) {
             Image(
                 bitmap = game.icon,
@@ -1787,7 +1778,6 @@ private fun GameShowcaseCard(
             )
         }
 
-        // Dark liquid gradient scrim for crisp text legibility
         Box(
             Modifier
                 .fillMaxSize()
@@ -1802,7 +1792,6 @@ private fun GameShowcaseCard(
                 )
         )
 
-        // Liquid glass specular rim
         Box(
             Modifier
                 .fillMaxSize()
@@ -1862,7 +1851,6 @@ private fun GameShowcaseCard(
                     }
                 }
 
-                // Glowing Cyan "▷ Play" Pill Button
                 Box(
                     Modifier
                         .height(44.dp)
@@ -1902,7 +1890,6 @@ private fun GameShowcaseCard(
 
             Spacer(Modifier.width(14.dp))
 
-            // Tilted 3D Floating Game Icon
             if (game.icon != null) {
                 Box(
                     Modifier
@@ -1941,7 +1928,7 @@ private fun ProfilePage(
     val hrs = sessionSeconds / 3600
     val mins = (sessionSeconds % 3600) / 60
     val secs = sessionSeconds % 60
-    val formattedSession = "%02d:%02d:%02d".format(Locale.ROOT, hrs, mins, secs)
+    val formattedSession = String.format(Locale.US, "%02d:%02d:%02d", hrs, mins, secs)
 
     val perfScore = remember(stats, shizukuGranted) {
         val base = if (shizukuGranted) 78 else 58
@@ -1956,7 +1943,6 @@ private fun ProfilePage(
             .verticalScroll(rememberScrollState())
             .padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 120.dp)
     ) {
-        // ---- Top Xnish Access (Shizuku Access) Card ----
         Glass(
             modifier = Modifier.fillMaxWidth(),
             radius = 28,
@@ -2008,7 +1994,6 @@ private fun ProfilePage(
 
             Spacer(Modifier.height(22.dp))
 
-            // Access Session Row
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = "Access Session",
@@ -2028,7 +2013,6 @@ private fun ProfilePage(
 
             Spacer(Modifier.height(16.dp))
 
-            // Level Row + 3 Segmented Bars
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = "Level",
@@ -2072,7 +2056,6 @@ private fun ProfilePage(
 
             Spacer(Modifier.height(16.dp))
 
-            // Performance Score Row
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = "Performance Score",
@@ -2104,7 +2087,6 @@ private fun ProfilePage(
 
         Spacer(Modifier.height(26.dp))
 
-        // ---- Real-time Monitoring Header ----
         Row(
             Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
@@ -2133,14 +2115,12 @@ private fun ProfilePage(
 
         Spacer(Modifier.height(16.dp))
 
-        // ---- Bento Grid: Left Tall RAM Card + Right Storage & CPU Cards ----
         Row(
             Modifier
                 .fillMaxWidth()
                 .height(246.dp),
             horizontalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // Left Tall RAM Card with Vertical Glowing Bar
             Glass(
                 modifier = Modifier
                     .weight(0.95f)
@@ -2158,7 +2138,6 @@ private fun ProfilePage(
                             .fillMaxHeight(),
                         verticalArrangement = Arrangement.SpaceBetween
                     ) {
-                        // Chip icon
                         Box(
                             Modifier
                                 .size(34.dp)
@@ -2192,15 +2171,16 @@ private fun ProfilePage(
                                     modifier = Modifier.padding(bottom = 6.dp)
                                 )
                             }
+                            val usedRamStr = (stats.ramTotalGb - stats.ramAvailGb).coerceAtLeast(0f).fmt1()
+                            val totalRamStr = stats.ramTotalGb.fmt1()
                             Text(
-                                text = "%.1f / %.1f GB".format(Locale.ROOT, stats.ramTotalGb - stats.ramAvailGb, stats.ramTotalGb),
+                                text = "$usedRamStr / $totalRamStr GB",
                                 color = TextMuted,
                                 fontSize = 10.5.sp
                             )
                         }
                     }
 
-                    // Vertical Glowing Pill Meter
                     val animRam by animateFloatAsState(
                         targetValue = (stats.ramPercent / 100f).coerceIn(0.08f, 1f),
                         animationSpec = spring(stiffness = 120f),
@@ -2230,14 +2210,12 @@ private fun ProfilePage(
                 }
             }
 
-            // Right Stacked Storage & CPU Cards
             Column(
                 modifier = Modifier
                     .weight(1.05f)
                     .fillMaxHeight(),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                // Storage Card
                 Glass(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -2279,7 +2257,6 @@ private fun ProfilePage(
                     )
                 }
 
-                // CPU Card
                 Glass(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -2300,7 +2277,7 @@ private fun ProfilePage(
                     Spacer(Modifier.weight(1f))
                     Row(verticalAlignment = Alignment.Bottom) {
                         Text(
-                            text = "%.2f".format(Locale.ROOT, stats.cpuGhz),
+                            text = stats.cpuGhz.fmt2(),
                             color = TextMain,
                             fontSize = 23.sp,
                             fontWeight = FontWeight.Black
@@ -2325,12 +2302,10 @@ private fun ProfilePage(
 
         Spacer(Modifier.height(14.dp))
 
-        // ---- Row 2: GPU Load & Live FPS / Refresh Rate (Hz) ----
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // GPU Card
             Glass(
                 modifier = Modifier.weight(1f),
                 radius = 24,
@@ -2370,7 +2345,6 @@ private fun ProfilePage(
                 )
             }
 
-            // FPS & Hz Card
             Glass(
                 modifier = Modifier.weight(1f),
                 radius = 24,
@@ -2413,7 +2387,6 @@ private fun ProfilePage(
 
         Spacer(Modifier.height(14.dp))
 
-        // ---- Network Latency Card ----
         Glass(
             modifier = Modifier.fillMaxWidth(),
             radius = 24,
@@ -2466,7 +2439,6 @@ private fun ProfilePage(
 
         Spacer(Modifier.height(22.dp))
 
-        // ---- Device Footer Badge ----
         Row(
             Modifier
                 .fillMaxWidth()
@@ -2511,7 +2483,7 @@ private fun ProfilePage(
 }
 
 // -----------------------------------------------------------------------------
-// PAGE 3: FEATURE SETTINGS PAGE (Opened when pressing Play on a Game)
+// PAGE 3: FEATURE SETTINGS PAGE (Fixed String.format crash)
 // -----------------------------------------------------------------------------
 @Composable
 private fun FeatureSettingsPage(
@@ -2775,10 +2747,13 @@ private fun FeatureSettingsPage(
             SectionHeading("▦", "Memory", "Bersihkan RAM dan hentikan aplikasi latar belakang")
             Spacer(Modifier.height(16.dp))
 
+            val availGbText = stats.ramAvailGb.fmt1()
+            val totalGbText = stats.ramTotalGb.fmt1()
+
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
                 Column(Modifier.weight(1f)) {
                     Text(
-                        "%.1f GB".format(Locale.ROOT, stats.ramAvailGb),
+                        "$availGbText GB",
                         color = TextMain,
                         fontSize = 26.sp,
                         fontWeight = FontWeight.Black
@@ -2786,7 +2761,7 @@ private fun FeatureSettingsPage(
                     Text("RAM tersedia", color = TextMuted, fontSize = 11.sp)
                 }
                 Text(
-                    "${stats.ramPercent}% digunakan  ·  %.1f GB".format(Locale.ROOT, stats.ramTotalGb),
+                    "${stats.ramPercent}% digunakan  ·  $totalGbText GB",
                     color = CyanAccent,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold
