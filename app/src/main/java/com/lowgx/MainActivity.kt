@@ -1,6 +1,7 @@
 package com.xnish.space
 
 import android.content.Context
+import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -9,6 +10,7 @@ import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -61,6 +63,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import rikka.shizuku.Shizuku
@@ -301,7 +304,9 @@ data class ConfigState(
     val fixedPerf: Boolean = true,
     val animSpeed: AnimSpeed = AnimSpeed.Fast,
     val netBoost: Boolean = true,
-    val batterySaver: Boolean = false
+    val batterySaver: Boolean = false,
+    val clearRamOnLaunch: Boolean = false,
+    val stopBgOnLaunch: Boolean = false
 )
 
 // -----------------------------------------------------------------------------
@@ -435,6 +440,95 @@ private fun checkAngle(): String {
     } else {
         "ANGLE yang ditemui:\n$output"
     }
+}
+
+// -----------------------------------------------------------------------------
+// Memory tools: clear RAM + force-stop background apps
+// -----------------------------------------------------------------------------
+
+/** Returns (availableMb, totalMb) from /proc/meminfo, or null if unreadable. */
+private fun readMem(): Pair<Long, Long>? = runCatching {
+    var total = -1L
+    var avail = -1L
+    java.io.File("/proc/meminfo").useLines { lines ->
+        for (line in lines) {
+            when {
+                line.startsWith("MemTotal:") -> total = line.filter { it.isDigit() }.toLong() / 1024
+                line.startsWith("MemAvailable:") -> avail = line.filter { it.isDigit() }.toLong() / 1024
+            }
+            if (total >= 0 && avail >= 0) break
+        }
+    }
+    if (total > 0 && avail >= 0) avail to total else null
+}.getOrNull()
+
+/**
+ * Kills cached/empty background processes ("am kill-all"). Foreground app, services
+ * that are still needed and the system are left alone by Android itself.
+ */
+private fun clearRam(): String {
+    val before = readMem()?.first
+    Sh.run("am kill-all")
+    Thread.sleep(900)
+    val after = readMem()?.first
+    return if (before != null && after != null) {
+        val freed = after - before
+        if (freed > 0) {
+            "RAM dibersihkan: $before MB → $after MB (+$freed MB tersedia)."
+        } else {
+            "Proses cache sudah dibersihkan. Tiada perubahan ketara pada RAM tersedia ($after MB)."
+        }
+    } else {
+        "Arahan clear RAM telah dihantar."
+    }
+}
+
+/** Apps that must never be force-stopped. */
+private fun protectedPackages(context: Context, selected: List<Game>): Set<String> {
+    val keep = mutableSetOf(
+        context.packageName,
+        "moe.shizuku.privileged.api",
+        "com.android.systemui"
+    )
+    selected.forEach { keep += it.pkg }
+
+    runCatching {
+        val home = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+        context.packageManager
+            .resolveActivity(home, PackageManager.MATCH_DEFAULT_ONLY)
+            ?.activityInfo?.packageName
+            ?.let { keep += it }
+    }
+    runCatching {
+        Settings.Secure.getString(context.contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
+            ?.substringBefore('/')
+            ?.takeIf { it.isNotBlank() }
+            ?.let { keep += it }
+    }
+    return keep
+}
+
+/** Force-stops user apps that currently have a running process. */
+private fun stopBackgroundApps(context: Context, apps: List<Game>, selected: List<Game>): String {
+    val keep = protectedPackages(context, selected)
+    val running = Sh.run("ps -A -o NAME 2>/dev/null")
+        .lineSequence()
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .toList()
+
+    if (running.size < 2) return "Gagal membaca senarai proses yang sedang berjalan."
+
+    val targets = apps.filter { app ->
+        app.pkg !in keep && running.any { it == app.pkg || it.startsWith(app.pkg + ":") }
+    }
+    if (targets.isEmpty()) return "Tiada aplikasi latar belakang untuk dihentikan."
+
+    Sh.run(targets.joinToString(" ; ") { "am force-stop ${it.pkg}" })
+
+    val names = targets.take(6).joinToString { it.name }
+    val more = if (targets.size > 6) " dan ${targets.size - 6} lagi" else ""
+    return "${targets.size} aplikasi latar belakang dihentikan: $names$more."
 }
 
 // -----------------------------------------------------------------------------
@@ -1052,6 +1146,59 @@ private fun GlassSearchField(
 // Main screen
 // -----------------------------------------------------------------------------
 @Composable
+private fun RamMeter(info: Pair<Long, Long>?) {
+    val total = info?.second ?: 0L
+    val avail = info?.first ?: 0L
+    val used = if (total > 0) ((total - avail).toFloat() / total).coerceIn(0f, 1f) else 0f
+    val animated by animateFloatAsState(
+        targetValue = used,
+        animationSpec = spring(stiffness = 120f),
+        label = "ram-used"
+    )
+    val track = RoundedCornerShape(50)
+
+    Column(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    if (info == null) "—" else "%.1f GB".format(avail / 1024f),
+                    color = TextMain,
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Black,
+                    letterSpacing = (-0.5).sp
+                )
+                Text("RAM tersedia", color = TextMuted, fontSize = 11.sp)
+            }
+            if (info != null) {
+                Text(
+                    "${(used * 100).roundToInt()}% digunakan  ·  ${"%.1f".format(total / 1024f)} GB",
+                    color = Accent,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+        Spacer(Modifier.height(11.dp))
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(10.dp)
+                .clip(track)
+                .background(Color(0x40000000))
+                .border(1.dp, Color.White.copy(alpha = .10f), track)
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth(animated)
+                    .fillMaxHeight()
+                    .clip(track)
+                    .background(Brush.horizontalGradient(listOf(AuroraCyan, Accent, AuroraRose)))
+            )
+        }
+    }
+}
+
+@Composable
 private fun LowGXApp() {
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
@@ -1065,6 +1212,7 @@ private fun LowGXApp() {
     val selected = remember { mutableStateListOf<Game>() }
     var statusMessage by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+    var ramInfo by remember { mutableStateOf<Pair<Long, Long>?>(null) }
 
     fun refreshShizuku() {
         shizukuStatus = when {
@@ -1088,6 +1236,14 @@ private fun LowGXApp() {
     LaunchedEffect(Unit) {
         refreshShizuku()
         scanApps()
+    }
+
+    // Live RAM reading (cheap: just parses /proc/meminfo)
+    LaunchedEffect(Unit) {
+        while (true) {
+            ramInfo = withContext(Dispatchers.IO) { readMem() }
+            delay(4000)
+        }
     }
 
     val selectedPackages = selected.map { it.pkg }.toSet()
@@ -1136,6 +1292,40 @@ private fun LowGXApp() {
         }
     }
 
+    fun runClearRam() {
+        if (!Sh.granted()) {
+            statusMessage = "Shizuku belum diberi kebenaran. Tekan kad Shizuku dahulu."
+            return
+        }
+        scope.launch {
+            busy = true
+            statusMessage = withContext(Dispatchers.IO) {
+                runCatching { clearRam() }
+                    .getOrElse { "Ralat: ${it.message ?: "Tidak diketahui"}" }
+            }
+            ramInfo = withContext(Dispatchers.IO) { readMem() }
+            busy = false
+        }
+    }
+
+    fun runStopBackground() {
+        if (!Sh.granted()) {
+            statusMessage = "Shizuku belum diberi kebenaran. Tekan kad Shizuku dahulu."
+            return
+        }
+        scope.launch {
+            busy = true
+            val apps = installedApps.toList()
+            val chosen = selected.toList()
+            statusMessage = withContext(Dispatchers.IO) {
+                runCatching { stopBackgroundApps(context, apps, chosen) }
+                    .getOrElse { "Ralat: ${it.message ?: "Tidak diketahui"}" }
+            }
+            ramInfo = withContext(Dispatchers.IO) { readMem() }
+            busy = false
+        }
+    }
+
     fun launchSelectedGame() {
         if (!Sh.granted()) {
             statusMessage = "Shizuku belum diberi kebenaran. Tekan kad Shizuku dahulu."
@@ -1148,10 +1338,24 @@ private fun LowGXApp() {
         }
         scope.launch {
             busy = true
+            val apps = installedApps.toList()
+            val chosen = selected.toList()
+            val cfg = config
             statusMessage = withContext(Dispatchers.IO) {
-                runCatching { applyAll(selected.toList(), config) }
+                val log = mutableListOf<String>()
+                if (cfg.stopBgOnLaunch) {
+                    log += runCatching { stopBackgroundApps(context, apps, chosen) }
+                        .getOrElse { "Ralat: ${it.message ?: "Tidak diketahui"}" }
+                }
+                if (cfg.clearRamOnLaunch) {
+                    log += runCatching { clearRam() }
+                        .getOrElse { "Ralat: ${it.message ?: "Tidak diketahui"}" }
+                }
+                log += runCatching { applyAll(chosen, cfg) }
                     .getOrElse { "Ralat: ${it.message ?: "Tidak diketahui"}" }
+                log.joinToString("\n")
             }
+            ramInfo = withContext(Dispatchers.IO) { readMem() }
             busy = false
 
             runCatching {
@@ -1491,6 +1695,56 @@ private fun LowGXApp() {
                     selectedIndex = speeds.indexOf(config.animSpeed),
                     modifier = Modifier.fillMaxWidth()
                 ) { config = config.copy(animSpeed = speeds[it]) }
+            }
+
+            // ---- Memory ----
+            Glass(Modifier.fillMaxWidth(), radius = 32) {
+                SectionHeading("▦", "Memory", "Bersihkan RAM dan hentikan aplikasi latar belakang")
+                Spacer(Modifier.height(18.dp))
+                RamMeter(ramInfo)
+
+                Spacer(Modifier.height(16.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    GlassButton(
+                        text = "Clear RAM",
+                        modifier = Modifier.weight(1f),
+                        primary = true,
+                        enabled = !busy
+                    ) { runClearRam() }
+                    GlassButton(
+                        text = "Stop background",
+                        modifier = Modifier.weight(1f),
+                        enabled = !busy
+                    ) { runStopBackground() }
+                }
+
+                Spacer(Modifier.height(16.dp))
+                GlassDivider()
+                Spacer(Modifier.height(12.dp))
+                ToggleRow(
+                    title = "Clear RAM sebelum Launch",
+                    subtitle = "Bersihkan proses cache secara automatik sebelum game dibuka.",
+                    checked = config.clearRamOnLaunch
+                ) { config = config.copy(clearRamOnLaunch = it) }
+
+                Spacer(Modifier.height(8.dp))
+                GlassDivider()
+                Spacer(Modifier.height(8.dp))
+                ToggleRow(
+                    title = "Henti app latar sebelum Launch",
+                    subtitle = "Force stop aplikasi lain yang sedang berjalan sebelum game dibuka.",
+                    checked = config.stopBgOnLaunch,
+                    badge = "FORCE STOP"
+                ) { config = config.copy(stopBgOnLaunch = it) }
+
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "Dikecualikan: game dipilih, Shizuku, launcher, keyboard dan XNISHz. " +
+                        "Aplikasi yang dihentikan tidak menghantar notifikasi sehingga dibuka semula.",
+                    color = TextMuted,
+                    fontSize = 10.sp,
+                    lineHeight = 14.sp
+                )
             }
 
             // ---- Network & power ----
