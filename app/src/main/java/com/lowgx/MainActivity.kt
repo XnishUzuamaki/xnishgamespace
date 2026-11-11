@@ -278,10 +278,10 @@ private fun loadInstalledApps(context: Context): List<Game> {
 
 enum class TexMode { Blur, Pixel }
 
+// Graphics Driver diasingkan daripada ANGLE mengikut gambar rujukan
 enum class GpuDriver(val label: String, val sub: String) {
     Default("Default", "SYSTEM"),
     GameDriver("Game Driver", "UPDATABLE"),
-    Angle("ANGLE", "LOW GRAPHICS"),
     Vulkan("Vulkan", "EXPERIMENTAL")
 }
 
@@ -298,15 +298,17 @@ enum class AnimSpeed(val label: String, val scale: String) {
 }
 
 data class ConfigState(
+    val driver: GpuDriver = GpuDriver.GameDriver,
+    val angleEnabled: Boolean = true,
     val texMode: TexMode = TexMode.Pixel,
     val texLevel: Int = 4,
     val resolution: Int = 100,
     val fps: String = "Max",
     val msaa4x: Boolean = false,
-    val driver: GpuDriver = GpuDriver.Angle,
     val gameMode: GameModeOpt = GameModeOpt.Performance,
     val fixedPerf: Boolean = true,
     val animSpeed: AnimSpeed = AnimSpeed.Fast,
+    val sensitivity: Int = 65,
     val netBoost: Boolean = true,
     val batterySaver: Boolean = false,
     val clearRamOnLaunch: Boolean = false,
@@ -432,36 +434,39 @@ private fun applyAll(selected: List<Game>, config: ConfigState): String {
     val commands = mutableListOf<String>()
     val packages = selected.joinToString(",") { it.pkg }
 
+    // 1. Graphics Driver (Default / Game Driver / Vulkan) - Diasingkan daripada ANGLE
     when (config.driver) {
         GpuDriver.Default -> {
-            commands += "settings delete global angle_gl_driver_selection_pkgs"
-            commands += "settings delete global angle_gl_driver_selection_values"
             commands += "settings delete global updatable_driver_production_opt_in_apps"
-            commands += "setprop debug.angle.feature_overrides_enabled \"\""
+            commands += "settings delete global updatable_driver_prerelease_opt_in_apps"
             commands += "setprop debug.hwui.renderer opengl"
         }
         GpuDriver.GameDriver -> {
-            commands += "settings delete global angle_gl_driver_selection_pkgs"
-            commands += "settings delete global angle_gl_driver_selection_values"
+            commands += "settings put global updatable_driver_all_apps 0"
             commands += "settings put global updatable_driver_production_opt_in_apps $packages"
             commands += "setprop debug.hwui.renderer opengl"
         }
-        GpuDriver.Angle -> {
-            val values = selected.joinToString(",") { "angle" }
-            val features = when (config.texMode) {
-                TexMode.Blur -> "disableAnisotropicFiltering:forceTextureLodOffset${config.texLevel}"
-                TexMode.Pixel -> "forceNearestFiltering:disableAnisotropicFiltering:forceTextureLodOffset${config.texLevel}"
-            }
-            commands += "settings put global angle_gl_driver_selection_pkgs $packages"
-            commands += "settings put global angle_gl_driver_selection_values $values"
-            commands += "setprop debug.angle.feature_overrides_enabled $features"
-        }
         GpuDriver.Vulkan -> {
-            commands += "settings delete global angle_gl_driver_selection_pkgs"
-            commands += "settings delete global angle_gl_driver_selection_values"
-            commands += "setprop debug.hwui.renderer skiagl"
+            commands += "settings put global updatable_driver_production_opt_in_apps $packages"
+            commands += "setprop debug.hwui.renderer skiavk"
             commands += "setprop debug.vulkan.layers \"\""
         }
+    }
+
+    // 2. Tetapan ANGLE (Boleh digunakan bersama mana-mana Graphics Driver di atas)
+    if (config.angleEnabled) {
+        val values = selected.joinToString(",") { "angle" }
+        val features = when (config.texMode) {
+            TexMode.Blur -> "disableAnisotropicFiltering:forceTextureLodOffset${config.texLevel}"
+            TexMode.Pixel -> "forceNearestFiltering:disableAnisotropicFiltering:forceTextureLodOffset${config.texLevel}"
+        }
+        commands += "settings put global angle_gl_driver_selection_pkgs $packages"
+        commands += "settings put global angle_gl_driver_selection_values $values"
+        commands += "setprop debug.angle.feature_overrides_enabled $features"
+    } else {
+        commands += "settings delete global angle_gl_driver_selection_pkgs"
+        commands += "settings delete global angle_gl_driver_selection_values"
+        commands += "setprop debug.angle.feature_overrides_enabled \"\""
     }
 
     val downscale = if (config.resolution >= 100) "disable" else (config.resolution / 100f).toString()
@@ -480,6 +485,21 @@ private fun applyAll(selected: List<Game>, config: ConfigState): String {
     commands += "setprop debug.egl.force_msaa ${if (config.msaa4x) "true" else "false"}"
     commands += "service call SurfaceFlinger 1008 i32 ${if (config.msaa4x) 1 else 0} 2>/dev/null || true"
     commands += "cmd power set-fixed-performance-mode-enabled ${config.fixedPerf}"
+
+    // 3. Touch Sensitivity (1 - 100: Semakin tinggi semakin licin skrin digeser)
+    val sens = config.sensitivity.coerceIn(1, 100)
+    val pointerSpeed = (((sens - 50) / 50f) * 7f).roundToInt().coerceIn(-7, 7)
+    val touchSlop = (12 - ((sens / 100f) * 10f).roundToInt()).coerceIn(1, 12)
+    val longPressTimeout = (450 - ((sens / 100f) * 250f).roundToInt()).coerceIn(200, 450)
+    val maxEvents = (120 + ((sens / 100f) * 180f).roundToInt()).coerceIn(120, 300)
+
+    commands += "settings put system pointer_speed $pointerSpeed"
+    commands += "settings put secure long_press_timeout $longPressTimeout"
+    commands += "settings put secure multi_press_timeout $longPressTimeout"
+    commands += "settings put global touch_slop $touchSlop"
+    commands += "setprop windowsmgr.max_events_per_sec $maxEvents"
+    commands += "setprop view_configuration.touch_slop $touchSlop"
+    commands += "setprop debug.touch_slop $touchSlop"
 
     commands += "settings put global window_animation_scale ${config.animSpeed.scale}"
     commands += "settings put global transition_animation_scale ${config.animSpeed.scale}"
@@ -512,7 +532,7 @@ private fun applyAll(selected: List<Game>, config: ConfigState): String {
     selected.forEach { game -> commands += "am force-stop ${game.pkg}" }
 
     val output = Sh.run(commands.joinToString(" && "))
-    return "Tetapan dihantar untuk ${selected.size} game." +
+    return "Tetapan dihantar untuk ${selected.size} game (Sensitivity: ${config.sensitivity}/100)." +
         if (output.isNotBlank()) "\n$output" else "\nSemak kesan tetapan pada peranti anda."
 }
 
@@ -521,12 +541,17 @@ private fun resetAll(selected: List<Game>): String {
         "settings delete global angle_gl_driver_selection_values",
         "settings delete global angle_gl_driver_selection_pkgs",
         "settings delete global updatable_driver_production_opt_in_apps",
+        "settings delete global updatable_driver_prerelease_opt_in_apps",
         "setprop debug.angle.feature_overrides_enabled \"\"",
         "setprop debug.hwui.renderer opengl",
         "setprop debug.egl.force_msaa false",
         "service call SurfaceFlinger 1008 i32 0 2>/dev/null || true",
         "cmd power set-fixed-performance-mode-enabled false",
         "cmd power set-mode 0",
+        "settings put system pointer_speed 0",
+        "settings put secure long_press_timeout 400",
+        "settings put secure multi_press_timeout 300",
+        "settings delete global touch_slop",
         "settings put global window_animation_scale 1.0",
         "settings put global transition_animation_scale 1.0",
         "settings put global animator_duration_scale 1.0",
@@ -2305,7 +2330,7 @@ private fun ProfilePage(
 }
 
 // -----------------------------------------------------------------------------
-// PAGE 3: FEATURE SETTINGS PAGE (Fixed String.format crash)
+// PAGE 3: FEATURE SETTINGS PAGE
 // -----------------------------------------------------------------------------
 @Composable
 private fun FeatureSettingsPage(
@@ -2448,15 +2473,38 @@ private fun FeatureSettingsPage(
             }
         }
 
-        // ---- Graphics Card ----
+        // ---- Graphics Card (ikut reka bentuk gambar rujukan + ANGLE berasingan) ----
         Glass(Modifier.fillMaxWidth(), radius = 30) {
-            SectionHeading("◈", "Graphics", "Visual quality and frame-rate options")
+            SectionHeading("◈", "Graphics", "Visual quality, graphics driver & ANGLE engine")
             Spacer(Modifier.height(18.dp))
 
-            FieldLabel(
-                "Game resolution",
-                "${config.resolution}%  ·  ${if (config.resolution == 100) "Native" else "Scaled"}"
-            )
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "Game resolution",
+                    color = TextMain,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    text = "Android 13+",
+                    color = CyanAccent,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(CyanAccent.copy(alpha = .14f))
+                        .border(1.dp, CyanAccent.copy(alpha = .30f), RoundedCornerShape(50))
+                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "${config.resolution}% · ${if (config.resolution == 100) "Native" else "Scaled"}",
+                    color = CyanAccent,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
             Slider(
                 value = config.resolution.toFloat(),
                 onValueChange = { onConfigChange(config.copy(resolution = (it / 5).roundToInt() * 5)) },
@@ -2468,8 +2516,12 @@ private fun FeatureSettingsPage(
                     inactiveTrackColor = Color.White.copy(alpha = .14f)
                 )
             )
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("50%", color = TextMuted, fontSize = 10.sp)
+                Text("100%", color = TextMuted, fontSize = 10.sp)
+            }
 
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(12.dp))
             FieldLabel("FPS limit")
             Spacer(Modifier.height(9.dp))
             val fpsOptions = listOf("30", "60", "90", "120", "Max")
@@ -2481,29 +2533,45 @@ private fun FeatureSettingsPage(
 
             Spacer(Modifier.height(14.dp))
             ToggleRow(
-                title = "4x MSAA",
-                subtitle = "Pilihan ini mungkin tidak disokong oleh semua GPU.",
-                checked = config.msaa4x,
-                badge = "ADVANCED"
+                title = "Anti-aliasing 4x MSAA",
+                subtitle = "Applies after the game restarts",
+                checked = config.msaa4x
             ) { onConfigChange(config.copy(msaa4x = it)) }
 
             Spacer(Modifier.height(14.dp))
             GlassDivider()
             Spacer(Modifier.height(14.dp))
-            FieldLabel("Graphics driver")
-            Spacer(Modifier.height(9.dp))
+
+            // Graphics Driver (Default / Game Driver / Vulkan) seperti dalam gambar
+            FieldLabel("Graphics driver", config.driver.label)
+            Text(
+                text = "Pilih pemacu grafik sistem tanpa mengganggu tetapan ANGLE di bawah.",
+                color = TextMuted,
+                fontSize = 10.5.sp
+            )
+            Spacer(Modifier.height(10.dp))
             val drivers = GpuDriver.values().toList()
             GlassSegmented(
                 options = drivers.map { it.label },
                 subs = drivers.map { it.sub },
-                selectedIndex = drivers.indexOf(config.driver),
+                selectedIndex = drivers.indexOf(config.driver).coerceAtLeast(0),
                 modifier = Modifier.fillMaxWidth()
             ) { onConfigChange(config.copy(driver = drivers[it])) }
 
-            if (config.driver == GpuDriver.Angle) {
-                Spacer(Modifier.height(16.dp))
-                GlassDivider()
-                Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(16.dp))
+            GlassDivider()
+            Spacer(Modifier.height(14.dp))
+
+            // Tetapan ANGLE Diasingkan (Kekal boleh guna walaupun pilih Vulkan/Game Driver/Default)
+            ToggleRow(
+                title = "ANGLE Low Graphics Engine",
+                subtitle = "Aktifkan profil tekstur ANGLE secara berasingan daripada Graphics Driver.",
+                checked = config.angleEnabled,
+                badge = "ANGLE"
+            ) { onConfigChange(config.copy(angleEnabled = it)) }
+
+            if (config.angleEnabled) {
+                Spacer(Modifier.height(12.dp))
                 FieldLabel("ANGLE texture profile")
                 Spacer(Modifier.height(9.dp))
                 GlassSegmented(
@@ -2523,11 +2591,11 @@ private fun FeatureSettingsPage(
             }
         }
 
-        // ---- Performance Card ----
+        // ---- Performance & Touch Sensitivity Card ----
         Glass(Modifier.fillMaxWidth(), radius = 30) {
-            SectionHeading("⚡", "Performance", "Android game mode and interface behaviour")
+            SectionHeading("⚡", "Performance", "Game mode, touch sensitivity & system animation")
             Spacer(Modifier.height(17.dp))
-            FieldLabel("Game mode")
+            FieldLabel("Game Mode")
             Spacer(Modifier.height(9.dp))
             val modes = GameModeOpt.values().toList()
             GlassSegmented(
@@ -2547,7 +2615,7 @@ private fun FeatureSettingsPage(
             Spacer(Modifier.height(14.dp))
             ToggleRow(
                 title = "Fixed performance mode",
-                subtitle = "Meminta mod prestasi tetap jika peranti menyokongnya.",
+                subtitle = "Lock clocks for stability",
                 checked = config.fixedPerf
             ) { onConfigChange(config.copy(fixedPerf = it)) }
 
@@ -2562,6 +2630,43 @@ private fun FeatureSettingsPage(
                 selectedIndex = speeds.indexOf(config.animSpeed),
                 modifier = Modifier.fillMaxWidth()
             ) { onConfigChange(config.copy(animSpeed = speeds[it])) }
+
+            Spacer(Modifier.height(15.dp))
+            GlassDivider()
+            Spacer(Modifier.height(14.dp))
+
+            // Fitur Baharu: Atur Sensitiviti 1 - 100
+            val sensDesc = when {
+                config.sensitivity >= 85 -> "Ultra Licin"
+                config.sensitivity >= 60 -> "Sangat Licin"
+                config.sensitivity >= 35 -> "Seimbang"
+                else -> "Standard"
+            }
+            FieldLabel(
+                text = "Touch Sensitivity (Kelicinan Layar)",
+                trailing = "${config.sensitivity} / 100 · $sensDesc"
+            )
+            Spacer(Modifier.height(3.dp))
+            Text(
+                text = "Semakin tinggi nilai (1–100), semakin licin dan responsif layar ketika digeser.",
+                color = TextMuted,
+                fontSize = 10.5.sp
+            )
+            Slider(
+                value = config.sensitivity.toFloat(),
+                onValueChange = { onConfigChange(config.copy(sensitivity = it.roundToInt().coerceIn(1, 100))) },
+                valueRange = 1f..100f,
+                colors = SliderDefaults.colors(
+                    thumbColor = Color.White,
+                    activeTrackColor = CyanAccent,
+                    inactiveTrackColor = Color.White.copy(alpha = .14f)
+                )
+            )
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("1 (Normal)", color = TextMuted, fontSize = 10.sp)
+                Text("50 (Fast)", color = TextMuted, fontSize = 10.sp)
+                Text("100 (Ultra Licin)", color = CyanAccent, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+            }
         }
 
         // ---- Memory Card ----
